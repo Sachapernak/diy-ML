@@ -9,12 +9,13 @@ class BasicNDArray:
     def __init__(self, array: list[float | list] | float):
         self._offset = 0
 
-        self._shape = BasicNDArray._shape_from_initial_array(array)
-        self._strides = BasicNDArray._get_stride(self._shape)
-
         if not isinstance(array, list):
             self._array = [array]
+            self._strides = []
+            self._shape = []
         else:
+            self._shape = BasicNDArray._shape_from_initial_array(array)
+            self._strides = BasicNDArray._get_stride(self._shape)
             self._array = self._flatten(array, self._shape)
 
     def _view(self, stride, shape, offset):
@@ -33,8 +34,12 @@ class BasicNDArray:
         buffer = []
         current = current_array
         while isinstance(current, list):
-            buffer.append(len(current))
-            current=current[0]
+            if len(current) != 0:
+                buffer.append(len(current))
+                current=current[0]
+            else:
+                buffer.append(0)
+                break
         return buffer
 
     @staticmethod
@@ -55,8 +60,12 @@ class BasicNDArray:
     def _flatten(array, shape):
 
         buffer = []
+
         if len(array) != shape[0]:
             raise ValueError("The shape of the array must be consistent")
+
+        if len(array) == 0:
+            return buffer
 
         leaf_seen = False
         branch_seen = False
