@@ -11,7 +11,7 @@ comparer avec np_arr.strides == tuple(s * np_arr.itemsize for s in ndarr.strides
 import pytest
 import numpy as np
 
-from s00_autograd_and_tensors.autograd import BasicNDArray
+from src.s00_autograd_and_tensors.autograd import BasicNDArray
 
 
 # ---------------------------------------------------------------------------
@@ -207,15 +207,246 @@ def test_scalaire_indexation():
 
 
 # ---------------------------------------------------------------------------
-# 7. Transpose (a faire)
+# 7. Transpose
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skip(reason="transpose pas encore implemente")
-def test_transpose_ne_copie_pas(arr_2x3):
-    ...
+def test_transpose_shared_array(arr_2x3):
+    transposed = arr_2x3.transpose()
 
+    transposed._array[0] = 10.0
+    # doit overwrite array[0] = 10.0
+    arr_2x3._array[0] = 9.0
 
-@pytest.mark.skip(reason="transpose pas encore implemente")
+    assert arr_2x3._array == transposed._array
+    assert arr_2x3._array is transposed._array
+
+def test_transpose_stride_shape_inverse(arr_2x3):
+    transposed = arr_2x3.transpose()
+
+    assert arr_2x3.shape[::-1] == transposed.shape
+    assert arr_2x3.strides[::-1] == transposed.strides
+
+def test_transpose_1d_array():
+    basic = BasicNDArray([1, 2, 3])
+    assert basic.array_equal(basic.transpose())
+
 def test_transpose_valeurs(arr_2x3):
-    # pour tout (i, j) : t.T[i, j] == t[j, i]
-    ...
+    transposed = arr_2x3.transpose()
+    for i in range(arr_2x3.shape[0]):
+        for j in range(arr_2x3.shape[1]):
+            assert arr_2x3[i,j] == transposed[j,i]
+
+def test_transpose_array_plus_contigue(arr_2x3x4):
+        transposed = arr_2x3x4.T
+
+        assert transposed.strides != BasicNDArray._get_stride(list(transposed.shape))
+
+def test_transpose_avec_axes(arr_2x3x4):
+    transposed = arr_2x3x4.transpose((2,0,1))
+
+    for i in range(arr_2x3x4.shape[0]):
+        for j in range(arr_2x3x4.shape[1]):
+            for k in range(arr_2x3x4.shape[2]):
+                assert arr_2x3x4[i,j,k] == transposed[k,i,j]
+
+def test_double_transpose(arr_2x3x4):
+    d_transposed = arr_2x3x4.T.T
+    assert d_transposed.array_equal(arr_2x3x4)
+
+def test_transpose_pas_assez_axes(arr_2x3x4):
+    with pytest.raises(ValueError):
+        arr_2x3x4.transpose((3,))
+
+def test_transpose_axes_doublons(arr_2x3x4):
+    with pytest.raises(ValueError):
+        arr_2x3x4.transpose((2,1,1))
+
+def test_transpose_out_of_bound(arr_2x3x4):
+    with pytest.raises(ValueError):
+        arr_2x3x4.transpose((0,1,3))
+
+# ---------------------------------------------------------------------------
+# 8. Flat
+# ---------------------------------------------------------------------------
+def test_flat_contigue():
+    basic = BasicNDArray([[1, 2], [3,4]])
+    assert list(basic.flat()) == basic._array
+
+def test_flat_sur_vue(arr_2x3x4):
+    assert list(arr_2x3x4[1].flat()) == list(range(12, 24))
+
+def test_flat_change_avec_transpose(arr_2x3):
+    assert list(arr_2x3.T.flat()) != arr_2x3._array
+
+def test_flat_scalaire():
+    basic = BasicNDArray(3.0)
+    assert next(basic.flat()) == 3.0
+
+def test_flat_vide():
+    basic = BasicNDArray([])
+    assert len(list(basic.flat())) == 0
+
+def test_taille_flat(arr_2x3x4):
+    assert len(list(arr_2x3x4.flat())) == arr_2x3x4.size
+
+# ---------------------------------------------------------------------------
+# 9. Iter
+# ---------------------------------------------------------------------------
+
+def test_iter_longueur(arr_2x3):
+    assert len(list(arr_2x3)) == len(arr_2x3)
+
+
+def test_iter_coherent_avec_getitem(arr_2x3x4):
+    sous_tableaux = list(arr_2x3x4)
+    for i, sous in enumerate(sous_tableaux):
+        assert sous.array_equal(arr_2x3x4[i])
+
+
+def test_iter_1d_produit_des_floats():
+    basic = BasicNDArray([1.0, 2.0, 3.0])
+    for element in basic:
+        assert isinstance(element, float)
+
+
+def test_iter_2d_produit_des_ndarray(arr_2x3):
+    for element in arr_2x3:
+        assert isinstance(element, BasicNDArray)
+        assert element.shape == (3,)
+
+
+def test_iter_scalaire_leve_typeerror():
+    basic = BasicNDArray(5.0)
+    with pytest.raises(TypeError):
+        list(basic)
+
+
+def test_iter_apres_transpose(arr_2x3):
+    # 2x3 transpose -> 3x2 : trois sous-tableaux de taille 2
+    transposed = arr_2x3.T
+    sous = list(transposed)
+    assert len(sous) == 3
+    assert all(s.shape == (2,) for s in sous)
+
+
+# ---------------------------------------------------------------------------
+# 10. len / size / nb_dim / is_scalar
+# ---------------------------------------------------------------------------
+
+def test_len_egale_premier_axe(arr_2x3, arr_2x3x4):
+    assert len(arr_2x3) == 2
+    assert len(arr_2x3x4) == 2
+
+
+def test_len_scalaire_leve_typeerror():
+    with pytest.raises(TypeError):
+        len(BasicNDArray(5.0))
+
+
+def test_size_3d(arr_2x3x4):
+    assert arr_2x3x4.size == 24
+
+
+def test_size_scalaire():
+    assert BasicNDArray(5.0).size == 1
+
+
+def test_size_vide():
+    assert BasicNDArray([]).size == 0
+
+
+def test_size_invariant_avec_flat(arr_2x3, arr_2x3x4):
+    for arr in (arr_2x3, arr_2x3x4, arr_2x3.T, arr_2x3x4[1]):
+        assert arr.size == len(list(arr.flat()))
+
+
+def test_nb_dim_coherent(arr_2x3x4):
+    assert arr_2x3x4.nb_dim == len(arr_2x3x4.shape) == len(arr_2x3x4.strides)
+
+
+def test_nb_dim_valeurs():
+    assert BasicNDArray(5.0).nb_dim == 0
+    assert BasicNDArray([1.0, 2.0]).nb_dim == 1
+    assert BasicNDArray([[1.0, 2.0]]).nb_dim == 2
+
+
+def test_is_scalar():
+    assert BasicNDArray(5.0).is_scalar
+    assert not BasicNDArray([1.0]).is_scalar
+    assert not BasicNDArray([]).is_scalar
+
+
+def test_vue_reduit_nb_dim(arr_2x3x4):
+    assert arr_2x3x4[0].nb_dim == 2
+    assert arr_2x3x4[0][0].nb_dim == 1
+
+
+# ---------------------------------------------------------------------------
+# 11. Repr
+# ---------------------------------------------------------------------------
+
+def test_repr_ne_plante_pas(arr_2x3, arr_2x3x4):
+    for arr in (BasicNDArray(5.0), BasicNDArray([]), BasicNDArray([1.0, 2.0]), arr_2x3, arr_2x3x4):
+        assert isinstance(repr(arr), str)
+
+
+def test_repr_1d():
+    assert repr(BasicNDArray([1.0, 2.0, 3.0])) == "[1.0, 2.0, 3.0]"
+
+
+def test_repr_2d(arr_2x3):
+    assert repr(arr_2x3) == "[[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]"
+
+
+def test_repr_vide():
+    assert repr(BasicNDArray([])) == "[]"
+
+
+def test_repr_reflete_le_transpose(arr_2x3):
+    # 2x3 -> 3x2 : l'affichage doit suivre les strides, pas le buffer
+    assert repr(arr_2x3.T) == "[[0.0, 3.0], [1.0, 4.0], [2.0, 5.0]]"
+
+
+# ---------------------------------------------------------------------------
+# 12. Indexation
+# ---------------------------------------------------------------------------
+
+def test_hors_bornes_deuxieme_axe(arr_2x3):
+    with pytest.raises(IndexError):
+        invalid = arr_2x3[0, 7]
+
+
+def test_hors_bornes_troisieme_axe(arr_2x3x4):
+    with pytest.raises(IndexError):
+        invalid = arr_2x3x4[0, 0, 99]
+
+
+def test_indexation_vue_shape(arr_2x3x4):
+    assert arr_2x3x4[1].shape == (3, 4)
+    assert arr_2x3x4[1][2].shape == (4,)
+    assert isinstance(arr_2x3x4[1][2][3], float)
+
+
+def test_indexer_un_scalaire_leve_indexerror():
+    with pytest.raises(IndexError):
+        invalid = BasicNDArray(5.0)[0]
+
+
+def test_indexation_apres_transpose(arr_2x3x4, data_2x3x4):
+    ref = np.array(data_2x3x4).transpose(2, 0, 1)
+    transposed = arr_2x3x4.transpose((2, 0, 1))
+    for i in range(transposed.shape[0]):
+        for j in range(transposed.shape[1]):
+            for k in range(transposed.shape[2]):
+                assert transposed[i, j, k] == ref[i, j, k]
+
+
+def test_vue_de_vue_partage_le_buffer(arr_2x3x4):
+    assert arr_2x3x4[1][2]._array is arr_2x3x4._array
+
+
+# ---------------------------------------------------------------------------
+# 13. Broadcast
+# ---------------------------------------------------------------------------
+
+# TODO
