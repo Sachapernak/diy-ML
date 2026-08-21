@@ -43,6 +43,22 @@ class BasicNDArray:
         return viewed
 
     @staticmethod
+    def _from_flat_array(array, shape):
+        """
+        Construit un nouveau BasicNDArray à partir d'un array flat
+        """
+        new_object = object.__new__(BasicNDArray)
+
+        new_object._array = array
+
+        new_object._shape = shape
+        new_object._strides = new_object._get_stride(shape)
+
+        new_object._offset = 0
+
+        return new_object
+
+    @staticmethod
     def _shape_from_initial_array(current_array) -> list[int]:
         """
         Calcul la Shape a partir de l'array initial
@@ -317,9 +333,30 @@ class BasicNDArray:
         return self._view(stride=new_stride, shape=shape, offset=self._offset)
 
 
-    # TODO
+    # TODO : Ajouter matmul avec vecteurs
     def matmul(self, other):
-        raise NotImplementedError("Matmult is not yet implemented.")
+        if self.nb_dim < 2 or other.nb_dim < 2:
+            raise ValueError("Given BasicNDArray must have at least 2 dimensions. Vectors and batchs are not supported (yet).")
+
+        # Check si le nombre de colonne de self est egal au nombre de ligne de other
+        if self.shape[1] != other.shape[0]:
+            raise ValueError("other.shape[0] must equal self.shape[1]")
+
+        res = []
+        shape = [self.shape[0], other.shape[1]]
+
+        for i in range(self.shape[0]):
+            for j in range(other.shape[1]):
+                accumulated = 0
+                for k in range(self.shape[1]):
+                    accumulated += self[i,k] * other[k,j]
+                res.append(accumulated)
+
+        return self._from_flat_array(res, shape)
+
+
+    def __matmul__(self, other):
+        return self.matmul(other)
 
     # TODO
     def reshape(self, shape):

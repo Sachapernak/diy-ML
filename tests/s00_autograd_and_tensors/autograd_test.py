@@ -449,4 +449,300 @@ def test_vue_de_vue_partage_le_buffer(arr_2x3x4):
 # 13. Broadcast
 # ---------------------------------------------------------------------------
 
-# TODO
+def test_broadcast_ajoute_un_axe():
+    basic = BasicNDArray([1.0, 2.0, 3.0])
+    b = basic.broadcast_to((2, 3))
+    assert b.shape == (2, 3)
+    assert b.strides == (0, 1)
+
+
+def test_broadcast_ne_copie_pas():
+    basic = BasicNDArray([1.0, 2.0, 3.0])
+    b = basic.broadcast_to((100, 3))
+
+    assert b._array is basic._array
+    assert len(b._array) == 3
+
+
+def test_broadcast_valeurs_repetees():
+    basic = BasicNDArray([1.0, 2.0, 3.0])
+    b = basic.broadcast_to((4, 3))
+    for i in range(4):
+        for j in range(3):
+            assert b[i, j] == basic[j]
+
+
+def test_broadcast_axe_interne():
+    # (2, 1) -> (2, 3) : c'est le deuxieme axe qui est etendu
+    basic = BasicNDArray([[1.0], [2.0]])
+    b = basic.broadcast_to((2, 3))
+    assert b.shape == (2, 3)
+    assert b.strides == (1, 0)
+    for i in range(2):
+        for j in range(3):
+            assert b[i, j] == basic[i, 0]
+
+
+def test_broadcast_scalaire():
+    basic = BasicNDArray(7.0)
+    b = basic.broadcast_to((2, 3))
+    assert b.shape == (2, 3)
+    assert b.strides == (0, 0)
+    assert all(v == 7.0 for v in b.flat())
+
+
+def test_broadcast_shape_identique(arr_2x3):
+    b = arr_2x3.broadcast_to((2, 3))
+    assert b.shape == arr_2x3.shape
+    assert b.strides == arr_2x3.strides
+    assert b.array_equal(arr_2x3)
+
+
+def test_broadcast_plusieurs_axes_ajoutes():
+    basic = BasicNDArray([1.0, 2.0])
+    b = basic.broadcast_to((3, 4, 2))
+    assert b.shape == (3, 4, 2)
+    assert b.strides == (0, 0, 1)
+
+
+def test_broadcast_size_vs_buffer():
+    basic = BasicNDArray([1.0, 2.0, 3.0])
+    b = basic.broadcast_to((5, 3))
+    assert b.size == 15
+    assert len(list(b.flat())) == 15
+    assert len(b._array) == 3
+
+
+def test_broadcast_contre_numpy():
+    data = [[1.0], [2.0]]
+    basic = BasicNDArray(data).broadcast_to((2, 3))
+    ref = np.broadcast_to(np.array(data), (2, 3))
+    for i in range(2):
+        for j in range(3):
+            assert basic[i, j] == ref[i, j]
+
+
+def test_broadcast_rejette_shape_trop_courte(arr_2x3):
+    with pytest.raises(ValueError):
+        arr_2x3.broadcast_to((3,))
+
+
+def test_broadcast_rejette_dimension_incompatible():
+    basic = BasicNDArray([1.0, 2.0, 3.0])
+    with pytest.raises(ValueError):
+        basic.broadcast_to((2, 5))  # 3 -> 5 impossible
+
+
+def test_broadcast_rejette_reduction():
+    basic = BasicNDArray([1.0, 2.0, 3.0])
+    with pytest.raises(ValueError):
+        basic.broadcast_to((2, 2))  # 3 -> 2 impossible
+
+
+def test_broadcast_puis_transpose():
+    basic = BasicNDArray([1.0, 2.0, 3.0])
+    b = basic.broadcast_to((2, 3)).T
+    assert b.shape == (3, 2)
+    assert b.strides == (1, 0)
+    for i in range(3):
+        for j in range(2):
+            assert b[i, j] == basic[i]
+
+
+# ---------------------------------------------------------------------------
+# 14. Matmul 2D
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mat_2x3():
+    return BasicNDArray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+
+
+@pytest.fixture
+def mat_3x4():
+    return BasicNDArray([[1.0, 2.0, 3.0, 4.0],
+                         [5.0, 6.0, 7.0, 8.0],
+                         [9.0, 10.0, 11.0, 12.0]])
+
+
+def test_matmul_shape(mat_2x3, mat_3x4):
+    res = mat_2x3.matmul(mat_3x4)
+    assert res.shape == (2, 4)
+
+
+def test_matmul_contre_numpy(mat_2x3, mat_3x4):
+    res = mat_2x3.matmul(mat_3x4)
+    ref = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) @ np.array(
+        [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0]])
+    for i in range(2):
+        for j in range(4):
+            assert res[i, j] == pytest.approx(ref[i, j])
+
+
+def test_matmul_identite(mat_2x3):
+    identite = BasicNDArray([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    res = mat_2x3.matmul(identite)
+    assert res.array_equal(mat_2x3)
+
+
+def test_matmul_carre():
+    a = BasicNDArray([[1.0, 2.0], [3.0, 4.0]])
+    b = BasicNDArray([[5.0, 6.0], [7.0, 8.0]])
+    res = a.matmul(b)
+    attendu = BasicNDArray([[19.0, 22.0], [43.0, 50.0]])
+    assert res.array_equal(attendu)
+
+
+def test_matmul_non_commutatif():
+    a = BasicNDArray([[1.0, 2.0], [3.0, 4.0]])
+    b = BasicNDArray([[5.0, 6.0], [7.0, 8.0]])
+    assert not a.matmul(b).array_equal(b.matmul(a))
+
+
+def test_matmul_alloue_un_nouveau_buffer(mat_2x3, mat_3x4):
+    res = mat_2x3.matmul(mat_3x4)
+    assert res._array is not mat_2x3._array
+    assert res._array is not mat_3x4._array
+    assert len(res._array) == 8
+
+
+def test_matmul_resultat_contigu(mat_2x3, mat_3x4):
+    res = mat_2x3.matmul(mat_3x4)
+    assert list(res.strides) == BasicNDArray._get_stride(list(res.shape))
+    assert res._offset == 0
+
+
+def test_matmul_sur_transpose(mat_2x3):
+    # (3,2) @ (2,3) -> (3,3)
+    res = mat_2x3.T.matmul(mat_2x3)
+    ref = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    ref = ref.T @ ref
+    assert res.shape == (3, 3)
+    for i in range(3):
+        for j in range(3):
+            assert res[i, j] == pytest.approx(ref[i, j])
+
+
+def test_matmul_sur_vue(arr_2x3x4, data_2x3x4):
+    gauche = arr_2x3x4[0].T          # (4,3)
+    droite = arr_2x3x4[1]            # (3,4)
+    res = gauche.matmul(droite)
+    ref = np.array(data_2x3x4)[0].T @ np.array(data_2x3x4)[1]
+    assert res.shape == (4, 4)
+    for i in range(4):
+        for j in range(4):
+            assert res[i, j] == pytest.approx(ref[i, j])
+
+
+def test_matmul_sur_broadcast():
+    v = BasicNDArray([1.0, 2.0, 3.0]).broadcast_to((2, 3))   # (2,3), strides (0,1)
+    m = BasicNDArray([[1.0], [1.0], [1.0]])                   # (3,1)
+    res = v.matmul(m)
+    assert res.shape == (2, 1)
+    assert res[0, 0] == pytest.approx(6.0)
+    assert res[1, 0] == pytest.approx(6.0)
+
+
+def test_matmul_dimension_interne_incompatible(mat_2x3):
+    autre = BasicNDArray([[1.0, 2.0], [3.0, 4.0]])   # (2,2), 3 != 2
+    with pytest.raises(ValueError):
+        mat_2x3.matmul(autre)
+
+
+def test_matmul_rejette_1d(mat_2x3):
+    vecteur = BasicNDArray([1.0, 2.0, 3.0])
+    with pytest.raises(ValueError):
+        mat_2x3.matmul(vecteur)
+
+
+def test_matmul_rejette_scalaire(mat_2x3):
+    with pytest.raises(ValueError):
+        mat_2x3.matmul(BasicNDArray(2.0))
+
+
+def test_matmul_rejette_3d(mat_2x3, arr_2x3x4):
+    with pytest.raises(ValueError):
+        mat_2x3.matmul(arr_2x3x4)
+
+
+def test_operateur_arobase(mat_2x3, mat_3x4):
+    """Ne passe que si __matmul__ est defini."""
+    assert (mat_2x3 @ mat_3x4).array_equal(mat_2x3.matmul(mat_3x4))
+
+
+# ---------------------------------------------------------------------------
+# 15. Matmul 1D  (squelettes)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skip(reason="pas imp")
+def test_matmul_vecteur_fois_matrice():
+    # (3,) @ (3, 4) -> (4,)
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_matmul_matrice_fois_vecteur():
+    # (2, 3) @ (3,) -> (2,)
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_matmul_produit_scalaire():
+    # (3,) @ (3,) -> 0-d
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_matmul_1d_contre_numpy():
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_matmul_1d_dimension_incompatible():
+    # (3,) @ (4, 2) doit lever
+    ...
+
+
+# ---------------------------------------------------------------------------
+# 16. Reshape
+# ---------------------------------------------------------------------------
+@pytest.mark.skip(reason="pas imp")
+def test_reshape_shape():
+    # (2, 3) -> (3, 2), puis -> (6,)
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_reshape_conserve_l_ordre_row_major():
+    # les valeurs doivent se lire dans le meme ordre qu'avant
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_reshape_contigu_ne_copie_pas():
+    # buffer partage (is) quand le tableau de depart est contigu
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_reshape_recalcule_les_strides():
+    # (2,3) contigu -> (3,2) : strides (2, 1)
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_reshape_apres_transpose():
+    # t.T est plus contigu.
+    # voir si raise erreur ou copier le truc
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_reshape_taille_incompatible():
+    # (2, 3) -> (4, 2) : 6 != 8 donc pas compatible
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_reshape_scalaire():
+    # 0-d -> (1,) et (1,) -> 0-d
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_reshape_contre_numpy():
+    ...
+
+@pytest.mark.skip(reason="pas imp")
+def test_is_contiguous():
+    # strides == _get_stride(shape) vrai sur nouveaux tab et faux apres transpose
+    ...
