@@ -11,7 +11,7 @@ comparer avec np_arr.strides == tuple(s * np_arr.itemsize for s in ndarr.strides
 import pytest
 import numpy as np
 
-from src.s00_autograd_and_tensors.autograd import BasicNDArray
+from src.s00_autograd_and_tensors.basic_nd_array import BasicNDArray
 
 
 # ---------------------------------------------------------------------------

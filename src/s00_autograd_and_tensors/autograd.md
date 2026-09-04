@@ -22,7 +22,7 @@ print(x.grad)
 ```
 
 1. On marque un tensor comme nécessitant l'autograd 
-2. Chaque op ajoute un noeud dans le "Direected Acyclic Graph" qui garde en mémoire toutes les OP
+2. Chaque op ajoute un noeud dans le "Directed Acyclic Graph" qui garde en mémoire toutes les OP
 3. Backward calcul le gradient en traversant le graph
 4. La valeur du gradiant s'ajoute dans le .grad du tensor
 
