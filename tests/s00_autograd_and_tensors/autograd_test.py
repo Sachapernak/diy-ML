@@ -671,78 +671,143 @@ def test_operateur_arobase(mat_2x3, mat_3x4):
 
 
 # ---------------------------------------------------------------------------
-# 15. Matmul 1D  (squelettes)
+# 16. is_contiguous
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skip(reason="pas imp")
-def test_matmul_vecteur_fois_matrice():
-    # (3,) @ (3, 4) -> (4,)
-    ...
+def test_contiguous_tableau_frais(arr_2x3, arr_2x3x4):
+    assert arr_2x3.is_contiguous
+    assert arr_2x3x4.is_contiguous
 
-@pytest.mark.skip(reason="pas imp")
-def test_matmul_matrice_fois_vecteur():
-    # (2, 3) @ (3,) -> (2,)
-    ...
 
-@pytest.mark.skip(reason="pas imp")
-def test_matmul_produit_scalaire():
-    # (3,) @ (3,) -> 0-d
-    ...
+def test_contiguous_1d_et_scalaire():
+    assert BasicNDArray([1.0, 2.0, 3.0]).is_contiguous
+    assert BasicNDArray(5.0).is_contiguous
 
-@pytest.mark.skip(reason="pas imp")
-def test_matmul_1d_contre_numpy():
-    ...
 
-@pytest.mark.skip(reason="pas imp")
-def test_matmul_1d_dimension_incompatible():
-    # (3,) @ (4, 2) doit lever
-    ...
+def test_contiguous_faux_apres_transpose(arr_2x3, arr_2x3x4):
+    assert not arr_2x3.T.is_contiguous
+    assert not arr_2x3x4.transpose((2, 0, 1)).is_contiguous
+
+
+def test_contiguous_vrai_apres_double_transpose(arr_2x3):
+    assert arr_2x3.T.T.is_contiguous
+
+
+def test_contiguous_vue_avec_offset(arr_2x3x4):
+    """t[1] a un offset de 12 mais reste contigue : l'offset n'entre pas dans le predicat."""
+    vue = arr_2x3x4[1]
+    assert vue._offset == 12
+    assert vue.is_contiguous
+
+
+def test_contiguous_faux_apres_broadcast():
+    b = BasicNDArray([1.0, 2.0, 3.0]).broadcast_to((2, 3))
+    assert not b.is_contiguous
+
+
+def test_contiguous_coherent_avec_flat(arr_2x3):
+    """Si contigu, l'ordre logique doit etre exactement l'ordre du buffer."""
+    assert arr_2x3.is_contiguous
+    assert list(arr_2x3.flat()) == arr_2x3._array
+
+    transposed = arr_2x3.T
+    assert not transposed.is_contiguous
+    assert list(transposed.flat()) != arr_2x3._array
+
+
+def test_contiguous_resultat_de_matmul(mat_2x3, mat_3x4):
+    assert mat_2x3.matmul(mat_3x4).is_contiguous
 
 
 # ---------------------------------------------------------------------------
-# 16. Reshape
+# 17. Reshape
 # ---------------------------------------------------------------------------
-@pytest.mark.skip(reason="pas imp")
-def test_reshape_shape():
-    # (2, 3) -> (3, 2), puis -> (6,)
-    ...
 
-@pytest.mark.skip(reason="pas imp")
-def test_reshape_conserve_l_ordre_row_major():
-    # les valeurs doivent se lire dans le meme ordre qu'avant
-    ...
+def test_reshape_shape(arr_2x3):
+    assert arr_2x3.reshape((3, 2)).shape == (3, 2)
+    assert arr_2x3.reshape((6,)).shape == (6,)
+    assert arr_2x3.reshape((1, 6)).shape == (1, 6)
 
-@pytest.mark.skip(reason="pas imp")
-def test_reshape_contigu_ne_copie_pas():
-    # buffer partage (is) quand le tableau de depart est contigu
-    ...
 
-@pytest.mark.skip(reason="pas imp")
-def test_reshape_recalcule_les_strides():
-    # (2,3) contigu -> (3,2) : strides (2, 1)
-    ...
+def test_reshape_recalcule_les_strides(arr_2x3):
+    assert list(arr_2x3.reshape((3, 2)).strides) == [2, 1]
+    assert list(arr_2x3.reshape((6,)).strides) == [1]
 
-@pytest.mark.skip(reason="pas imp")
-def test_reshape_apres_transpose():
-    # t.T est plus contigu.
-    # voir si raise erreur ou copier le truc
-    ...
 
-@pytest.mark.skip(reason="pas imp")
-def test_reshape_taille_incompatible():
-    # (2, 3) -> (4, 2) : 6 != 8 donc pas compatible
-    ...
+def test_reshape_ne_copie_pas(arr_2x3):
+    assert arr_2x3.reshape((3, 2))._array is arr_2x3._array
 
-@pytest.mark.skip(reason="pas imp")
-def test_reshape_scalaire():
-    # 0-d -> (1,) et (1,) -> 0-d
-    ...
 
-@pytest.mark.skip(reason="pas imp")
-def test_reshape_contre_numpy():
-    ...
+def test_reshape_conserve_l_ordre(arr_2x3):
+    """L'ordre logique doit etre identique avant et apres."""
+    avant = list(arr_2x3.flat())
+    apres = list(arr_2x3.reshape((3, 2)).flat())
+    assert avant == apres
 
-@pytest.mark.skip(reason="pas imp")
-def test_is_contiguous():
-    # strides == _get_stride(shape) vrai sur nouveaux tab et faux apres transpose
-    ...
+
+def test_reshape_valeurs(arr_2x3):
+    # [[0,1,2],[3,4,5]] -> [[0,1],[2,3],[4,5]]
+    r = arr_2x3.reshape((3, 2))
+    attendu = BasicNDArray([[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]])
+    assert r.array_equal(attendu)
+
+
+def test_reshape_contre_numpy(data_2x3x4):
+    basic = BasicNDArray(data_2x3x4).reshape((4, 6))
+    ref = np.array(data_2x3x4).reshape(4, 6)
+    for i in range(4):
+        for j in range(6):
+            assert basic[i, j] == ref[i, j]
+
+
+def test_reshape_identite(arr_2x3):
+    r = arr_2x3.reshape((2, 3))
+    assert r.array_equal(arr_2x3)
+    assert r.is_contiguous
+
+
+def test_reshape_reste_contigu(arr_2x3):
+    assert arr_2x3.reshape((3, 2)).is_contiguous
+
+
+def test_reshape_sur_vue(arr_2x3x4):
+    """t[1] est contigue avec offset 12 : le reshape doit marcher et garder l'offset."""
+    vue = arr_2x3x4[1]  # (3, 4), offset 12
+    r = vue.reshape((12,))
+    assert r.shape == (12,)
+    assert r._offset == 12
+    assert list(r.flat()) == list(range(12, 24))
+
+
+def test_reshape_taille_incompatible(arr_2x3):
+    with pytest.raises(ValueError):
+        arr_2x3.reshape((4, 2))  # 6 != 8
+
+    with pytest.raises(ValueError):
+        arr_2x3.reshape((5,))  # 6 != 5
+
+
+def test_reshape_non_contigu_leve(arr_2x3):
+    """Choix de design : on refuse plutot que de copier silencieusement."""
+    with pytest.raises(ValueError):
+        arr_2x3.T.reshape((6,))
+
+
+def test_reshape_broadcast_leve():
+    b = BasicNDArray([1.0, 2.0, 3.0]).broadcast_to((2, 3))
+    with pytest.raises(ValueError):
+        b.reshape((6,))
+
+
+def test_reshape_scalaire_vers_1d():
+    """A trancher : autorise-t-on 0-d -> (1,) ? Adapte l'attendu a ton choix."""
+    r = BasicNDArray(5.0).reshape((1,))
+    assert r.shape == (1,)
+    assert r[0] == 5.0
+
+
+def test_reshape_1d_vers_scalaire():
+    r = BasicNDArray([5.0]).reshape(())
+    assert r.shape == ()
+    assert r[()] == 5.0
+

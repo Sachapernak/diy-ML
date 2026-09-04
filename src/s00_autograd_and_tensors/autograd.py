@@ -4,6 +4,9 @@ import itertools
 import math
 from typing import Callable
 
+from PIL.ImageChops import offset
+
+
 class BasicNDArray:
     _array: list[float]
     _strides: list[int]
@@ -358,13 +361,39 @@ class BasicNDArray:
     def __matmul__(self, other):
         return self.matmul(other)
 
-    # TODO
     def reshape(self, shape):
-        raise NotImplementedError("Reshape is not yet implemented.")
+        """
+        Change la shape de l'array vers une autre shape.
+
+        La shape d'arrivée doit contenir autant d'éléments que celle d'origine.
+        Cette opération n'est autorisée que sur des array contigües.
+        """
+        total_len = 1
+        for shape_value in shape:
+            total_len *= shape_value
+
+        if self.size != total_len:
+            raise ValueError("The given shape does not give out the same element count as this BasicNDArray.")
+
+        if not self.is_contiguous:
+            raise ValueError("The current BasicNDArray is not a contiguous array.")
+
+        return self._view(stride=self._get_stride(shape), shape=shape, offset=self._offset)
+
 
     # ================
     # === Properties
     # ================
+    @property
+    def is_contiguous(self):
+        """
+        Vérifie si le tableau est contiguë
+
+        Càd que les strides sont les meme que celles d'un tableau contiguë de meme shape
+        """
+        flat_strides = self._get_stride(self._shape)
+        return list(self._strides) == flat_strides
+
 
     @property
     def shape(self) -> tuple[int, ...]:
