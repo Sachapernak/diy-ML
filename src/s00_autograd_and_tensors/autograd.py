@@ -441,15 +441,3 @@ class BasicNDArray:
     def _assert_not_scalar(self, message: str) -> None:
         if self.is_scalar:
             raise TypeError(message)
-
-
-
-
-class BasicTensor:
-    nd_array: BasicNDArray
-    gradient: list[float]
-    parents: list[BasicTensor]
-    backward: Callable | None
-    requires_grad: bool
-
-    # TODO
