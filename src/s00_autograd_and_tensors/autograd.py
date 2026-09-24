@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Iterable
 
 import numpy as np
+
+
 
 def unbroadcast(array : np.ndarray, shape) -> np.ndarray:
     """
@@ -88,16 +90,96 @@ class BasicTensor:
 
 
     def __mul__(self, other):
-        raise NotImplementedError("__mul__ not implemented yet")
+        if not isinstance(other, BasicTensor):
+            other = BasicTensor(other)
+
+        # operation: multiplication
+        op = lambda a, b: a * b
+
+        data = op(self.data, other.data)
+
+        out = BasicTensor(data)
+
+        if self.requires_grad or other.requires_grad:
+            out.requires_grad = True
+            out.parents = [self, other]
+
+            # calcul gradient
+            def _backward():
+                # Fonction de backward pour mul qui calcul ∂L/∂a  =  ∂L/∂c * ∂c/∂a
+                # On a :
+                # - ∂L/∂a le gradient du parent,
+                # - ∂L/∂c le gradient de out,
+                # - ∂c/∂a la dérivée de c par rapport à a,
+                # - c = a * b
+                #
+                # ∂(a*b)/∂a = b -> grad_parent = grad_out * data_other
+                self._accumulate(unbroadcast(out.grad * other.data, self.data.shape))
+                other._accumulate(unbroadcast(out.grad * self.data, other.data.shape))
+
+            out._backward = _backward
+
+        return out
 
     def __add__(self, other):
-        raise NotImplementedError("__add__ not implemented yet")
+        if not isinstance(other, BasicTensor):
+            other = BasicTensor(other)
+
+        # operation : addition
+        op = lambda a, b: a + b
+
+        data = op(self.data, other.data)
+
+        out = BasicTensor(data)
+
+        if self.requires_grad or other.requires_grad:
+
+            out.requires_grad = True
+            out.parents = [self, other]
+
+            # calcul gradient
+            def _backward():
+                # Fonction de backward pour add : on ajoute le gradient du nouveau parent a ses deux parents
+                # pour c = a + b le gradient est ∂L/∂a  =  ∂L/∂c * ∂c/∂a
+                # avec ∂L/∂a le gradient du parent, ∂L/∂c le gradient de out et ∂c/∂a la dérivée de c par rapport à a
+                # La dérivée locale vaut 1 ici, donc on a gradient parent = gradient enfant
+                self._accumulate(unbroadcast(out.grad, self.data.shape))
+                other._accumulate(unbroadcast(out.grad, other.data.shape))
+
+            out._backward = _backward
+
+        return out
+
 
     def mul(self, other):
         return self.__mul__(other)
 
     def add(self,other):
         return self.__add__(other)
+
+    def sum(self):
+        """
+        Fonction pour calculer la somme des composants d'un vecteur vers un seul scalaire
+        """
+        data = self.data.sum()
+
+        out = BasicTensor(data)
+
+        if self.requires_grad:
+
+            out.requires_grad = True
+            out.parents = [self]
+
+            # calcul gradient
+            def _backward():
+                # On fait une somme donc on doit calculer (a_i)' pour avoir la sensibilité a c
+                # (a_i)' = 1 donc on à le vecteur 1_N -> [1, 1, ..., 1]
+                # 1_N * grad_c  = grad_c étendu n fois :
+                self._accumulate(np.full(self.data.shape,out.grad))
+
+            out._backward = _backward
+
+        return out
 
 
     # =============
@@ -154,7 +236,8 @@ class BasicTensor:
         )
 
         if self.grad is None:
-            self.grad = contribution
+            self.grad = contribution.copy()
         else:
-            self.grad = self.grad + contribution
+            self.grad += contribution
+
 

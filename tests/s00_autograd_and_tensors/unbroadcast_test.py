@@ -53,7 +53,6 @@ def test_toutes_dims_a_un():
 # ---------------------------------------------------------------------------
 
 def test_somme_des_repetitions():
-    """Chaque element a ete repete 32 fois -> recoit 32 contributions."""
     res = unbroadcast(np.ones((32, 10)), (10,))
     assert np.allclose(res, np.full((10,), 32.0))
 
@@ -74,21 +73,18 @@ def test_somme_axe_interne():
 
 
 def test_valeurs_non_uniformes():
-    """[[0,1,2],[3,4,5]] somme sur l'axe 0 -> [3, 5, 7]"""
     grad = np.arange(6.0).reshape(2, 3)
     res = unbroadcast(grad, (3,))
     assert np.allclose(res, np.array([3.0, 5.0, 7.0]))
 
 
 def test_valeurs_axe_interne_non_uniformes():
-    """[[0,1,2],[3,4,5]] somme sur l'axe 1 avec keepdims -> [[3],[12]]"""
     grad = np.arange(6.0).reshape(2, 3)
     res = unbroadcast(grad, (2, 1))
     assert np.allclose(res, np.array([[3.0], [12.0]]))
 
 
 def test_somme_totale_conservee():
-    """Invariant fort : unbroadcast redistribue, il ne perd rien."""
     grad = np.random.randn(4, 5, 3)
     for cible in [(3,), (5, 3), (1, 3), (1, 1, 3), ()]:
         res = unbroadcast(grad, cible)
@@ -109,7 +105,6 @@ def test_somme_totale_conservee():
     ((2, 3), (2, 3)),
 ])
 def test_aller_retour_shape(petite, grande):
-    """Ce que np.broadcast_to etend, unbroadcast doit le ramener."""
     etendu = np.broadcast_to(np.ones(petite), grande)
     assert unbroadcast(np.asarray(etendu), petite).shape == petite
 
@@ -121,7 +116,6 @@ def test_aller_retour_shape(petite, grande):
     ((4, 1), (4, 6)),
 ])
 def test_facteur_de_repetition(petite, grande):
-    """Le resultat vaut le nombre de repetitions, partout."""
     facteur = int(np.prod(grande)) // int(np.prod(petite))
     res = unbroadcast(np.ones(grande), petite)
     assert np.allclose(res, np.full(petite, float(facteur)))
@@ -171,11 +165,10 @@ def test_rejette_dimension_incompatible_dernier_axe():
 
 
 # ---------------------------------------------------------------------------
-# 6. Le cas reel : x @ W + b
+# 6. Exemple : x @ W + b
 # ---------------------------------------------------------------------------
 
 def test_cas_biais_mlp():
-    """b de shape (10,) additionne a une sortie (32, 10) : c'est LE cas d'usage."""
     batch, features = 32, 10
     grad_sortie = np.random.randn(batch, features)
     grad_biais = unbroadcast(grad_sortie, (features,))
