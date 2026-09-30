@@ -30,7 +30,8 @@ print(x.grad)
 # Tensor
 ## C'est quoi ?
 Un tableau / une matrice multi-dimensionnelle qui contient des valeurs numériques
-Utile pour faire les grosses opérations mathématiques utilisées en deep learning
+Utile pour faire les grosses opérations mathématiques utilisées en deep learning. On ajoute par dessus un autograd 
+pour calculer le gradient et calculer l'effet de chaque paramètre sur la loss.
 
 ### Données de base pour un tensor simple
 - Le tableau multi-dimensionnel (un NDArray)
