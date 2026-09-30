@@ -497,3 +497,584 @@ def test_gradcheck_une_seule_entree_derivable():
     b = BasicTensor(np.random.randn(2, 3))
     gradcheck(lambda x: (x * b).sum(), [a])
     assert b.grad is None
+
+
+# ---------------------------------------------------------------------------
+# 10. neg / sub
+# ---------------------------------------------------------------------------
+
+def test_neg_forward():
+    a = BasicTensor([[1.0, -2.0], [3.0, -4.0]])
+    assert np.allclose((-a).data, [[-1.0, 2.0], [-3.0, 4.0]])
+
+
+def test_neg_backward():
+    a = BasicTensor(3.0, requires_grad=True)
+    (-a).backward()
+    assert np.allclose(a.grad, -1.0)
+
+
+def test_gradcheck_neg():
+    a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    gradcheck(lambda x: (-x).sum(), [a])
+
+
+def test_sub_forward():
+    a = BasicTensor([5.0, 7.0])
+    b = BasicTensor([2.0, 3.0])
+    assert np.allclose((a - b).data, [3.0, 4.0])
+
+
+def test_sub_backward_signes_opposes():
+    a = BasicTensor(5.0, requires_grad=True)
+    b = BasicTensor(2.0, requires_grad=True)
+    (a - b).backward()
+    assert np.allclose(a.grad, 1.0)
+    assert np.allclose(b.grad, -1.0)
+
+
+def test_gradcheck_sub():
+    a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    b = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    gradcheck(lambda x, y: (x - y).sum(), [a, b])
+
+
+def test_gradcheck_sub_broadcast():
+    a = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    b = BasicTensor(np.random.randn(4), requires_grad=True)
+    gradcheck(lambda x, y: (x - y).sum(), [a, b])
+
+
+# ---------------------------------------------------------------------------
+# 11. matmul
+# ---------------------------------------------------------------------------
+
+def test_matmul_forward():
+    a = BasicTensor([[1.0, 2.0], [3.0, 4.0]])
+    b = BasicTensor([[5.0, 6.0], [7.0, 8.0]])
+    assert np.allclose((a @ b).data, [[19.0, 22.0], [43.0, 50.0]])
+
+
+def test_matmul_shape():
+    a = BasicTensor(np.random.randn(2, 3))
+    b = BasicTensor(np.random.randn(3, 4))
+    assert (a @ b).data.shape == (2, 4)
+
+
+def test_matmul_backward_shapes():
+    a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    b = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    (a @ b).sum().backward()
+    assert a.grad.shape == (2, 3)
+    assert b.grad.shape == (3, 4)
+
+
+def test_matmul_backward_valeurs():
+    A = np.random.randn(2, 3).astype(np.float32)
+    B = np.random.randn(3, 4).astype(np.float32)
+    a = BasicTensor(A, requires_grad=True)
+    b = BasicTensor(B, requires_grad=True)
+    (a @ b).sum().backward()
+    ones = np.ones((2, 4), dtype=np.float32)
+    assert np.allclose(a.grad, ones @ B.T, atol=1e-5)
+    assert np.allclose(b.grad, A.T @ ones, atol=1e-5)
+
+
+def test_gradcheck_matmul():
+    a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    b = BasicTensor(np.random.randn(3, 2), requires_grad=True)
+    gradcheck(lambda x, y: (x @ y).sum(), [a, b])
+
+
+def test_gradcheck_matmul_non_carre():
+    a = BasicTensor(np.random.randn(3, 5), requires_grad=True)
+    b = BasicTensor(np.random.randn(5, 2), requires_grad=True)
+    gradcheck(lambda x, y: (x @ y).sum(), [a, b])
+
+
+def test_matmul_contre_pytorch():
+    torch = pytest.importorskip("torch")
+    A = np.random.randn(3, 4).astype(np.float32)
+    B = np.random.randn(4, 2).astype(np.float32)
+
+    ta = torch.tensor(A, requires_grad=True)
+    tb = torch.tensor(B, requires_grad=True)
+    (ta @ tb).sum().backward()
+
+    a = BasicTensor(A, requires_grad=True)
+    b = BasicTensor(B, requires_grad=True)
+    (a @ b).sum().backward()
+
+    assert np.allclose(a.grad, ta.grad.numpy(), atol=1e-4)
+    assert np.allclose(b.grad, tb.grad.numpy(), atol=1e-4)
+
+
+def test_matmul_couche_lineaire():
+    x = BasicTensor(np.random.randn(8, 4), requires_grad=True)
+    W = BasicTensor(np.random.randn(4, 3), requires_grad=True)
+    b = BasicTensor(np.random.randn(3), requires_grad=True)
+    ((x @ W) + b).sum().backward()
+    assert x.grad.shape == (8, 4)
+    assert W.grad.shape == (4, 3)
+    assert b.grad.shape == (3,)
+    assert np.allclose(b.grad, 8.0)  # 8 lignes de batch
+
+
+# ---------------------------------------------------------------------------
+# 12. pow / div
+# ---------------------------------------------------------------------------
+
+def test_pow_forward():
+    a = BasicTensor([2.0, 3.0])
+    assert np.allclose(a.pow(2.0).data, [4.0, 9.0])
+
+
+def test_pow_backward_exposant_constant():
+    """d(a^2)/da = 2a"""
+    a = BasicTensor(3.0, requires_grad=True)
+    a.pow(2.0).backward()
+    assert np.allclose(a.grad, 6.0)
+
+
+def test_gradcheck_pow_carre():
+    a = BasicTensor(np.random.rand(2, 3) + 1.0, requires_grad=True)  # > 0
+    gradcheck(lambda x: x.pow(2.0).sum(), [a])
+
+
+def test_gradcheck_pow_inverse():
+    a = BasicTensor(np.random.rand(2, 3) + 1.0, requires_grad=True)
+    gradcheck(lambda x: x.pow(-1.0).sum(), [a])
+
+
+def test_div_forward():
+    a = BasicTensor([6.0, 8.0])
+    b = BasicTensor([2.0, 4.0])
+    assert np.allclose((a / b).data, [3.0, 2.0])
+
+
+def test_div_backward():
+    a = BasicTensor(6.0, requires_grad=True)
+    b = BasicTensor(2.0, requires_grad=True)
+    (a / b).backward()
+    assert np.allclose(a.grad, 0.5, atol=1e-5)
+    assert np.allclose(b.grad, -1.5, atol=1e-5)
+
+
+def test_gradcheck_div():
+    a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    b = BasicTensor(np.random.rand(2, 3) + 1.0, requires_grad=True)  # loin de 0
+    gradcheck(lambda x, y: (x / y).sum(), [a, b])
+
+
+# ---------------------------------------------------------------------------
+# 13. relu
+# ---------------------------------------------------------------------------
+
+def test_relu_forward():
+    a = BasicTensor([-2.0, -0.5, 0.0, 1.0, 3.0])
+    assert np.allclose(a.relu().data, [0.0, 0.0, 0.0, 1.0, 3.0])
+
+
+def test_relu_backward_est_une_indicatrice():
+    a = BasicTensor([-2.0, 5.0, 3.0], requires_grad=True)
+    a.relu().sum().backward()
+    assert np.allclose(a.grad, [0.0, 1.0, 1.0])
+
+
+def test_relu_backward_zero_exclu():
+    a = BasicTensor([0.0], requires_grad=True)
+    a.relu().sum().backward()
+    assert np.allclose(a.grad, [0.0])
+
+
+def test_gradcheck_relu():
+    donnees = np.random.randn(2, 4)
+    donnees = np.where(np.abs(donnees) < 0.1, 0.5, donnees)
+    a = BasicTensor(donnees, requires_grad=True)
+    gradcheck(lambda x: x.relu().sum(), [a])
+
+
+def test_relu_contre_pytorch():
+    torch = pytest.importorskip("torch")
+    donnees = np.array([[-2.0, 1.0], [0.5, -0.3]], dtype=np.float32)
+
+    ta = torch.tensor(donnees, requires_grad=True)
+    torch.relu(ta).sum().backward()
+
+    a = BasicTensor(donnees, requires_grad=True)
+    a.relu().sum().backward()
+
+    assert np.allclose(a.grad, ta.grad.numpy())
+
+
+# ---------------------------------------------------------------------------
+# 14. maximum (element par element)
+# ---------------------------------------------------------------------------
+
+def test_maximum_forward():
+    a = BasicTensor([1.0, 5.0, 3.0])
+    b = BasicTensor([4.0, 2.0, 3.0])
+    assert np.allclose(a.maximum(b).data, [4.0, 5.0, 3.0])
+
+
+def test_maximum_backward_va_au_plus_grand():
+    a = BasicTensor([1.0, 5.0], requires_grad=True)
+    b = BasicTensor([4.0, 2.0], requires_grad=True)
+    a.maximum(b).sum().backward()
+    assert np.allclose(a.grad, [0.0, 1.0])
+    assert np.allclose(b.grad, [1.0, 0.0])
+
+
+def test_maximum_egalite_un_seul_recoit():
+    a = BasicTensor([3.0], requires_grad=True)
+    b = BasicTensor([3.0], requires_grad=True)
+    a.maximum(b).sum().backward()
+    total = float(a.grad[0]) + float(b.grad[0])
+    assert np.isclose(total, 1.0)
+
+
+def test_gradcheck_maximum():
+    a = BasicTensor(np.random.randn(2, 3) + 5.0, requires_grad=True)
+    b = BasicTensor(np.random.randn(2, 3) - 5.0, requires_grad=True)
+    gradcheck(lambda x, y: x.maximum(y).sum(), [a, b], eps=1e-2, tol=1e-2)
+
+
+def test_maximum_broadcast():
+    a = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    z = BasicTensor(0.0)
+    out = a.maximum(z)
+    assert out.data.shape == (3, 4)
+
+
+# ---------------------------------------------------------------------------
+# 15. max (reduction)
+# ---------------------------------------------------------------------------
+
+def test_max_global_forward():
+    a = BasicTensor([[1.0, 7.0], [3.0, 2.0]])
+    assert np.allclose(a.max().data, 7.0)
+    assert a.max().data.shape == ()
+
+
+def test_max_axe_forward():
+    a = BasicTensor([[1.0, 7.0], [3.0, 2.0]])
+    assert np.allclose(a.max(axis=1).data, [7.0, 3.0])
+    assert np.allclose(a.max(axis=0).data, [3.0, 7.0])
+
+
+def test_max_keepdims():
+    a = BasicTensor([[1.0, 7.0], [3.0, 2.0]])
+    assert a.max(axis=1, keepdims=True).data.shape == (2, 1)
+
+
+def test_max_global_backward():
+    a = BasicTensor([[1.0, 7.0], [3.0, 2.0]], requires_grad=True)
+    a.max().backward()
+    assert np.allclose(a.grad, [[0.0, 1.0], [0.0, 0.0]])
+
+
+def test_max_axe_backward():
+    a = BasicTensor([[1.0, 7.0], [3.0, 2.0]], requires_grad=True)
+    a.max(axis=1).sum().backward()
+    assert np.allclose(a.grad, [[0.0, 1.0], [1.0, 0.0]])
+
+
+def test_max_keepdims_backward():
+    a = BasicTensor([[1.0, 7.0], [3.0, 2.0]], requires_grad=True)
+    a.max(axis=1, keepdims=True).sum().backward()
+    assert np.allclose(a.grad, [[0.0, 1.0], [1.0, 0.0]])
+
+
+def test_max_grad_shape_preservee():
+    a = BasicTensor(np.random.randn(3, 4, 5), requires_grad=True)
+    a.max(axis=1).sum().backward()
+    assert a.grad.shape == (3, 4, 5)
+
+
+def test_max_contre_pytorch():
+    torch = pytest.importorskip("torch")
+    donnees = np.random.randn(3, 4).astype(np.float32)
+
+    ta = torch.tensor(donnees, requires_grad=True)
+    ta.max(dim=1).values.sum().backward()
+
+    a = BasicTensor(donnees, requires_grad=True)
+    a.max(axis=1).sum().backward()
+
+    assert np.allclose(a.grad, ta.grad.numpy())
+
+
+def test_max_dtype():
+    a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    a.max(axis=1).sum().backward()
+    assert a.grad.dtype == np.float32
+
+
+# ---------------------------------------------------------------------------
+# 16. Compositions
+# ---------------------------------------------------------------------------
+
+def test_gradcheck_couche_lineaire_relu():
+    x = BasicTensor(np.random.randn(4, 3), requires_grad=True)
+    W = BasicTensor(np.random.randn(3, 2), requires_grad=True)
+    b = BasicTensor(np.random.randn(2), requires_grad=True)
+    gradcheck(lambda a, w, c: ((a @ w) + c).relu().sum(), [x, W, b])
+
+
+def test_gradcheck_deux_couches():
+    x = BasicTensor(np.random.randn(4, 3), requires_grad=True)
+    W1 = BasicTensor(np.random.randn(3, 5), requires_grad=True)
+    W2 = BasicTensor(np.random.randn(5, 2), requires_grad=True)
+    gradcheck(lambda a, w1, w2: ((a @ w1).relu() @ w2).sum(), [x, W1, W2], tol=1e-2, eps=1e-2)
+
+
+def test_mlp_contre_pytorch():
+    torch = pytest.importorskip("torch")
+    X = np.random.randn(4, 3).astype(np.float32)
+    W1 = np.random.randn(3, 5).astype(np.float32)
+    W2 = np.random.randn(5, 2).astype(np.float32)
+
+    tx = torch.tensor(X, requires_grad=True)
+    tw1 = torch.tensor(W1, requires_grad=True)
+    tw2 = torch.tensor(W2, requires_grad=True)
+    (torch.relu(tx @ tw1) @ tw2).sum().backward()
+
+    x = BasicTensor(X, requires_grad=True)
+    w1 = BasicTensor(W1, requires_grad=True)
+    w2 = BasicTensor(W2, requires_grad=True)
+    ((x @ w1).relu() @ w2).sum().backward()
+
+    assert np.allclose(x.grad, tx.grad.numpy(), atol=1e-4)
+    assert np.allclose(w1.grad, tw1.grad.numpy(), atol=1e-4)
+    assert np.allclose(w2.grad, tw2.grad.numpy(), atol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# 17. sum avec axe
+# ---------------------------------------------------------------------------
+
+def test_sum_axe_forward():
+    a = BasicTensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assert np.allclose(a.sum(axis=0).data, [5.0, 7.0, 9.0])
+    assert np.allclose(a.sum(axis=1).data, [6.0, 15.0])
+
+
+def test_sum_axe_shape():
+    a = BasicTensor(np.random.randn(3, 4, 5))
+    assert a.sum(axis=0).data.shape == (4, 5)
+    assert a.sum(axis=1).data.shape == (3, 5)
+    assert a.sum(axis=2).data.shape == (3, 4)
+
+
+def test_sum_keepdims_shape():
+    a = BasicTensor(np.random.randn(3, 4))
+    assert a.sum(axis=1, keepdims=True).data.shape == (3, 1)
+    assert a.sum(axis=0, keepdims=True).data.shape == (1, 4)
+
+
+def test_sum_global_inchange():
+    a = BasicTensor([[1.0, 2.0], [3.0, 4.0]])
+    assert a.sum().data.shape == ()
+    assert np.allclose(a.sum().data, 10.0)
+
+
+def test_sum_axe_backward_un_partout():
+    a = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    a.sum(axis=1).sum().backward()
+    assert a.grad.shape == (3, 4)
+    assert np.allclose(a.grad, np.ones((3, 4)))
+
+
+def test_sum_keepdims_backward():
+    a = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    a.sum(axis=0, keepdims=True).sum().backward()
+    assert a.grad.shape == (3, 4)
+    assert np.allclose(a.grad, np.ones((3, 4)))
+
+
+def test_sum_axe_backward_pondere():
+    a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    poids = BasicTensor([10.0, 100.0], requires_grad=False)
+    (a.sum(axis=1) * poids).sum().backward()
+    assert np.allclose(a.grad[0], 10.0)
+    assert np.allclose(a.grad[1], 100.0)
+
+
+def test_sum_grad_dtype():
+    a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    a.sum(axis=1).sum().backward()
+    assert a.grad.dtype == np.float32
+
+
+def test_sum_accumule_deux_fois():
+    a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    a.sum(axis=1).sum().backward()
+    a.sum(axis=1).sum().backward()
+    assert np.allclose(a.grad, 2.0)
+
+
+def test_gradcheck_sum_axe():
+    a = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    gradcheck(lambda x: x.sum(axis=1).sum(), [a])
+
+
+def test_gradcheck_sum_keepdims():
+    a = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    gradcheck(lambda x: x.sum(axis=0, keepdims=True).sum(), [a])
+
+
+def test_gradcheck_sum_axe_3d():
+    a = BasicTensor(np.random.randn(2, 3, 4), requires_grad=True)
+    gradcheck(lambda x: x.sum(axis=1).sum(), [a])
+
+
+def test_sum_contre_pytorch():
+    torch = pytest.importorskip("torch")
+    donnees = np.random.randn(3, 4).astype(np.float32)
+
+    ta = torch.tensor(donnees, requires_grad=True)
+    (ta.sum(dim=1) * ta.sum(dim=1)).sum().backward()
+
+    a = BasicTensor(donnees, requires_grad=True)
+    (a.sum(axis=1) * a.sum(axis=1)).sum().backward()
+
+    assert np.allclose(a.grad, ta.grad.numpy(), atol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# 18. mean
+# ---------------------------------------------------------------------------
+
+def test_mean_forward():
+    a = BasicTensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assert np.allclose(a.mean().data, 3.5)
+    assert np.allclose(a.mean(axis=1).data, [2.0, 5.0])
+
+
+def test_mean_backward():
+    a = BasicTensor(np.random.randn(2, 5), requires_grad=True)
+    a.mean().backward()
+    assert np.allclose(a.grad, 1.0 / 10.0, atol=1e-6)
+
+
+def test_mean_axe_backward():
+    a = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    a.mean(axis=1).sum().backward()
+    assert np.allclose(a.grad, 1.0 / 4.0, atol=1e-6)
+
+
+def test_gradcheck_mean():
+    a = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    gradcheck(lambda x: x.mean(axis=1).sum(), [a])
+
+
+# ---------------------------------------------------------------------------
+# 19. exp
+# ---------------------------------------------------------------------------
+
+def test_exp_forward():
+    a = BasicTensor([0.0, 1.0, 2.0])
+    assert np.allclose(a.exp().data, [1.0, np.e, np.e ** 2], atol=1e-5)
+
+
+def test_exp_backward_egale_la_sortie():
+    a = BasicTensor([0.0, 1.0, 2.0], requires_grad=True)
+    out = a.exp()
+    out.sum().backward()
+    assert np.allclose(a.grad, out.data, atol=1e-5)
+
+
+def test_gradcheck_exp():
+    a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    gradcheck(lambda x: x.exp().sum(), [a], tol=1e-1, eps=1e-1)
+
+
+def test_exp_contre_pytorch():
+    torch = pytest.importorskip("torch")
+    donnees = np.random.randn(2, 3).astype(np.float32)
+
+    ta = torch.tensor(donnees, requires_grad=True)
+    ta.exp().sum().backward()
+
+    a = BasicTensor(donnees, requires_grad=True)
+    a.exp().sum().backward()
+
+    assert np.allclose(a.grad, ta.grad.numpy(), atol=1e-4)
+
+
+def test_exp_deborde_sur_grands_logits():
+    """exp(800) = inf. -> log-sum-exp trick"""
+    a = BasicTensor([800.0])
+    assert np.isinf(a.exp().data[0])
+
+
+# ---------------------------------------------------------------------------
+# 20. log
+# ---------------------------------------------------------------------------
+
+def test_log_forward():
+    a = BasicTensor([1.0, np.e, np.e ** 2])
+    assert np.allclose(a.log().data, [0.0, 1.0, 2.0], atol=1e-5)
+
+
+def test_log_backward_inverse():
+    a = BasicTensor([1.0, 2.0, 4.0], requires_grad=True)
+    a.log().sum().backward()
+    assert np.allclose(a.grad, [1.0, 0.5, 0.25], atol=1e-5)
+
+
+def test_gradcheck_log():
+    a = BasicTensor(np.random.rand(2, 3) + 1.0, requires_grad=True)
+    gradcheck(lambda x: x.log().sum(), [a])
+
+
+def test_log_contre_pytorch():
+    torch = pytest.importorskip("torch")
+    donnees = (np.random.rand(2, 3) + 1.0).astype(np.float32)
+
+    ta = torch.tensor(donnees, requires_grad=True)
+    ta.log().sum().backward()
+
+    a = BasicTensor(donnees, requires_grad=True)
+    a.log().sum().backward()
+
+    assert np.allclose(a.grad, ta.grad.numpy(), atol=1e-4)
+
+
+def test_log_exp_est_identite():
+    a = BasicTensor(np.random.rand(2, 3) + 1.0, requires_grad=True)
+    assert np.allclose(a.exp().log().data, a.data, atol=1e-4)
+
+
+def test_gradcheck_log_exp():
+    a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    gradcheck(lambda x: x.exp().log().sum(), [a])
+
+
+# ---------------------------------------------------------------------------
+# 21. Composition softmax naif
+# ---------------------------------------------------------------------------
+
+def test_softmax_naif_somme_a_un():
+    logits = BasicTensor(np.random.randn(3, 5), requires_grad=True)
+    e = logits.exp()
+    probas = e / e.sum(axis=1, keepdims=True)
+    assert np.allclose(probas.data.sum(axis=1), 1.0, atol=1e-5)
+
+
+def test_gradcheck_softmax_naif():
+    logits = BasicTensor(np.random.randn(3, 4) * 0.5, requires_grad=True)
+
+    def softmax_somme(x):
+        e = x.exp()
+        return (e / e.sum(axis=1, keepdims=True)).sum()
+
+    gradcheck(softmax_somme, [logits])
+
+
+def test_softmax_naif_deborde():
+    """exp deborde et softmax donne des NaN."""
+    logits = BasicTensor([[800.0, 1.0, 2.0]])
+    e = logits.exp()
+    probas = e / e.sum(axis=1, keepdims=True)
+    assert np.isnan(probas.data).any() or np.isinf(probas.data).any()

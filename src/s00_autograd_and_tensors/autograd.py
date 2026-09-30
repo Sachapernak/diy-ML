@@ -150,18 +150,8 @@ class BasicTensor:
 
         return out
 
-
-    def mul(self, other):
-        return self.__mul__(other)
-
-    def add(self,other):
-        return self.__add__(other)
-
-    def sum(self):
-        """
-        Fonction pour calculer la somme des composants d'un vecteur vers un seul scalaire
-        """
-        data = self.data.sum()
+    def __neg__(self):
+        data = np.negative(self.data)
 
         out = BasicTensor(data)
 
@@ -170,17 +160,278 @@ class BasicTensor:
             out.requires_grad = True
             out.parents = [self]
 
-            # calcul gradient
             def _backward():
-                # On fait une somme donc on doit calculer (a_i)' pour avoir la sensibilité a c
-                # (a_i)' = 1 donc on à le vecteur 1_N -> [1, 1, ..., 1]
-                # 1_N * grad_c  = grad_c étendu n fois :
-                self._accumulate(np.full(self.data.shape,out.grad))
+                self._accumulate(np.negative(out.grad))
 
             out._backward = _backward
 
         return out
 
+    def __sub__(self, other):
+        if not isinstance(other, BasicTensor):
+            other = BasicTensor(other)
+
+        # operation : soustraction
+        op = lambda a, b: a - b
+
+        data = op(self.data, other.data)
+
+        out = BasicTensor(data)
+
+        if self.requires_grad or other.requires_grad:
+
+            out.requires_grad = True
+            out.parents = [self, other]
+
+            # calcul gradient
+            def _backward():
+                # a - b -> = a + (-b), seul b est passé en negatif du coup
+                self._accumulate(unbroadcast(out.grad, self.data.shape))
+                other._accumulate(unbroadcast(np.negative(out.grad), other.data.shape))
+
+            out._backward = _backward
+
+        return out
+
+
+    def __matmul__(self, other):
+        if not isinstance(other, BasicTensor):
+            other = BasicTensor(other)
+
+        op = lambda a, b: np.matmul(a, b)
+
+        data = op(self.data, other.data)
+
+        out = BasicTensor(data)
+
+        if self.requires_grad or other.requires_grad:
+
+            out.requires_grad = True
+            out.parents = [self, other]
+
+            # calcul gradient
+            #
+            # grad_A = grad @ B.T
+            # grad_B = A.T @ grad
+
+            def _backward():
+
+                self._accumulate(unbroadcast(np.matmul(out.grad, other.data.transpose()), self.data.shape))
+                other._accumulate(unbroadcast(np.matmul(self.data.transpose(), out.grad), other.data.shape))
+
+            out._backward = _backward
+
+        return out
+
+    def __truediv__(self, other):
+        return self.mul(other.pow(-1))
+
+    def mul(self, other):
+        return self.__mul__(other)
+
+    def add(self,other):
+        return self.__add__(other)
+
+
+    def sum(self, axis=None, keepdims=False):
+        """
+        Somme le long d'un axe (ou de tous si axis est None).
+        """
+
+        data = np.sum(self.data, axis=axis, keepdims=keepdims)
+
+        out = BasicTensor(data)
+
+        if self.requires_grad:
+            out.requires_grad = True
+            out.parents = [self]
+
+            def _backward():
+                if axis is None:
+                    # somme globale
+                    grad_aligne = out.grad
+                elif keepdims:
+                    # shape deja alignee sur celle de l'entree
+                    grad_aligne = out.grad
+                else:
+                    # on remet l'axe pour que le broadcast marche
+                    grad_aligne = np.expand_dims(out.grad, axis)
+
+                contribution = np.broadcast_to(grad_aligne, self.data.shape)
+
+                self._accumulate(contribution.astype(self.data.dtype))
+
+            out._backward = _backward
+
+        return out
+
+
+    def matmul(self, other):
+        return self.__matmul__(other)
+
+    def neg(self):
+        return self.__neg__()
+
+    def sub(self, other):
+        return self.__sub__(other)
+
+    def pow(self, other):
+        if not isinstance(other, BasicTensor):
+            other = BasicTensor(other)
+
+        op = lambda a, b: np.pow(a, b)
+
+        data = op(self.data, other.data)
+
+        out = BasicTensor(data)
+
+        if self.requires_grad or other.requires_grad:
+
+            out.requires_grad = True
+            out.parents = [self, other]
+
+            def _backward():
+                # sensibilité de z :
+                # a = ba^(b-1)
+                # b = a^b * ln(a)
+                self._accumulate(unbroadcast(out.grad * other.data * np.pow(self.data, np.subtract(other.data, 1)),
+                                             self.data.shape))
+                other._accumulate(unbroadcast(out.grad * np.pow(self.data, other.data) * np.log(self.data),
+                                              other.data.shape))
+
+            out._backward = _backward
+
+        return out
+
+    def exp(self):
+        """
+        Exponentielle, element par element.
+        """
+        data = np.exp(self.data)
+
+        out = BasicTensor(data)
+
+        if self.requires_grad:
+            out.requires_grad = True
+            out.parents = [self]
+
+            def _backward():
+                self._accumulate(out.grad * out.data)
+
+            out._backward = _backward
+
+        return out
+
+    def div(self, other):
+        return self.__truediv__(other)
+
+    def relu(self):
+
+        data = np.maximum(0, self.data)
+
+        out = BasicTensor(data)
+
+        if self.requires_grad:
+
+            out.requires_grad = True
+            out.parents = [self]
+
+            def _backward():
+                self._accumulate(out.grad * (self.data > 0))
+
+            out._backward = _backward
+
+        return out
+
+    def maximum(self, other):
+        if not isinstance(other, BasicTensor):
+            other = BasicTensor(other)
+
+        op = lambda a, b: np.maximum(a, b)
+
+        data = op(self.data, other.data)
+
+        out = BasicTensor(data)
+
+        if self.requires_grad or other.requires_grad:
+
+            out.requires_grad = True
+            out.parents = [self, other]
+
+            def _backward():
+                # sensibilité de z :
+                # a = ba^(b-1)
+                # b = a^b * ln(a)
+                self._accumulate(unbroadcast(out.grad * (self.data > other.data), self.data.shape))
+                other._accumulate(unbroadcast(out.grad * (other.data >= self.data), other.data.shape))
+
+            out._backward = _backward
+
+        return out
+
+    def max(self, axis=None, keepdims=False):
+
+        data = np.max(self.data, axis=axis, keepdims=keepdims)
+
+        out = BasicTensor(data)
+
+        if self.requires_grad:
+            out.requires_grad = True
+            out.parents = [self]
+
+            def _backward():
+                if axis is None:
+                    # max global, out.data et out.grad sont des scalaires
+                    masque = (self.data == out.data)
+                    contribution = out.grad * masque
+                else:
+                    # shape reduite alignée sur la shape d'entree
+                    if keepdims:
+                        data_alignee = out.data
+                        grad_aligne = out.grad
+                    else:
+                        data_alignee = np.expand_dims(out.data, axis)
+                        grad_aligne = np.expand_dims(out.grad, axis)
+
+                    masque = (self.data == data_alignee)
+                    contribution = grad_aligne * masque
+
+                self._accumulate(contribution.astype(self.data.dtype))
+
+            out._backward = _backward
+
+        return out
+
+
+
+    def mean(self, axis=None, keepdims=False):
+        if axis is None:
+            n = self.data.size
+        else:
+            n = self.data.shape[axis]
+
+        return self.sum(axis=axis, keepdims=keepdims) * (1.0 / n)
+
+
+
+    def log(self):
+        """
+        ln, elem par elem
+        """
+        data = np.log(self.data)
+
+        out = BasicTensor(data)
+
+        if self.requires_grad:
+            out.requires_grad = True
+            out.parents = [self]
+
+            def _backward():
+                self._accumulate(out.grad / self.data)
+
+            out._backward = _backward
+
+        return out
 
     # =============
     # fonctions internes
