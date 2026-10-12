@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-import itertools
 import math
-from typing import Callable
-
-from PIL.ImageChops import offset
-
 
 class BasicNDArray:
     _array: list[float]

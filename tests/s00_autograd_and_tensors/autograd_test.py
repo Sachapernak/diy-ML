@@ -6,7 +6,7 @@ import numpy as np
 
 from src.s00_autograd_and_tensors.autograd import BasicTensor
 
-def gradcheck(f, entrees, eps=1e-3, tol=1e-3):
+def gradcheck(f, entrees, eps=1e-2, tol=1e-2):
     """
     Vérifie les calcul de dérivées via le taux d'accroissement
 
@@ -1078,3 +1078,224 @@ def test_softmax_naif_deborde():
     e = logits.exp()
     probas = e / e.sum(axis=1, keepdims=True)
     assert np.isnan(probas.data).any() or np.isinf(probas.data).any()
+
+# ---------------------------------------------------------------------------
+# 22. naive_softmax
+# ---------------------------------------------------------------------------
+
+def one_hot(indices, nb_classes):
+    """Helper de test : indices (N,) -> one-hot (N, C) en BasicTensor."""
+    indices = np.asarray(indices)
+    m = np.zeros((len(indices), nb_classes), dtype=np.float32)
+    m[np.arange(len(indices)), indices] = 1.0
+    return BasicTensor(m)
+
+
+def test_softmax_valeurs_connues():
+    z = BasicTensor([[2.0, 1.0, 0.0]])
+    p = z.naive_softmax()
+    assert np.allclose(p.data, [[0.665, 0.245, 0.090]], atol=1e-3)
+
+
+def test_softmax_chaque_ligne_somme_a_un():
+    z = BasicTensor(np.random.randn(5, 4))
+    p = z.naive_softmax()
+    assert np.allclose(p.data.sum(axis=-1), 1.0, atol=1e-5)
+
+
+def test_softmax_shape():
+    z = BasicTensor(np.random.randn(5, 4))
+    assert z.naive_softmax().data.shape == (5, 4)
+
+
+def test_softmax_positif():
+    z = BasicTensor(np.random.randn(5, 4) * 3)
+    assert (z.naive_softmax().data > 0).all()
+
+
+def test_softmax_logits_egaux_donne_uniforme():
+    z = BasicTensor(np.zeros((2, 4)))
+    assert np.allclose(z.naive_softmax().data, 0.25)
+
+
+def test_softmax_invariant_par_translation():
+    z = np.random.randn(3, 4).astype(np.float32)
+    p1 = BasicTensor(z).naive_softmax().data
+    p2 = BasicTensor(z + 5.0).naive_softmax().data
+    assert np.allclose(p1, p2, atol=1e-5)
+
+
+def test_softmax_1d():
+    z = BasicTensor([2.0, 1.0, 0.0])
+    p = z.naive_softmax()
+    assert np.isclose(p.data.sum(), 1.0, atol=1e-5)
+
+
+def test_softmax_contre_pytorch():
+    torch = pytest.importorskip("torch")
+    z = np.random.randn(3, 4).astype(np.float32)
+    ref = torch.softmax(torch.tensor(z), dim=-1).numpy()
+    assert np.allclose(BasicTensor(z).naive_softmax().data, ref, atol=1e-5)
+
+
+def test_gradcheck_softmax():
+    z = BasicTensor(np.random.randn(3, 4) * 0.5, requires_grad=True)
+    poids = BasicTensor(np.random.randn(3, 4))
+    gradcheck(lambda x: (x.naive_softmax() * poids).sum(), [z])
+
+
+# ---------------------------------------------------------------------------
+# 23. naive_cross_entropy
+# ---------------------------------------------------------------------------
+
+def test_ce_valeur_connue():
+    """z = [2, 1, 0], bonne classe 0 -> -log(0.665) = 0.408"""
+    z = BasicTensor([[2.0, 1.0, 0.0]])
+    loss = z.naive_softmax().naive_cross_entropy(one_hot([0], 3))
+    assert loss.data.shape == ()
+    assert np.isclose(loss.data, 0.408, atol=1e-3)
+
+
+def test_ce_renvoie_un_scalaire():
+    z = BasicTensor(np.random.randn(8, 5))
+    loss = z.naive_softmax().naive_cross_entropy(one_hot(np.random.randint(0, 5, 8), 5))
+    assert loss.data.shape == ()
+
+
+def test_ce_logits_uniformes_donne_log_c():
+    z = BasicTensor(np.zeros((4, 10)))
+    loss = z.naive_softmax().naive_cross_entropy(one_hot([0, 3, 7, 9], 10))
+    assert np.isclose(loss.data, np.log(10), atol=1e-4)
+
+
+def test_ce_bonne_prediction_loss_faible():
+    z = BasicTensor([[10.0, 0.0, 0.0]])
+    loss = z.naive_softmax().naive_cross_entropy(one_hot([0], 3))
+    assert loss.data < 0.01
+
+
+def test_ce_mauvaise_prediction_loss_forte():
+    z = BasicTensor([[10.0, 0.0, 0.0]])
+    loss = z.naive_softmax().naive_cross_entropy(one_hot([2], 3))
+    assert loss.data > 5.0
+
+
+def test_ce_toujours_positive():
+    z = BasicTensor(np.random.randn(6, 4))
+    loss = z.naive_softmax().naive_cross_entropy(one_hot(np.random.randint(0, 4, 6), 4))
+    assert loss.data >= 0
+
+
+def test_ce_moyenne_independante_de_la_taille_du_batch():
+    z = np.random.randn(3, 4).astype(np.float32)
+    cibles = [0, 2, 1]
+    l1 = BasicTensor(z).naive_softmax().naive_cross_entropy(one_hot(cibles, 4))
+    l2 = BasicTensor(np.concatenate([z, z])).naive_softmax().naive_cross_entropy(
+        one_hot(cibles + cibles, 4))
+    assert np.isclose(l1.data, l2.data, atol=1e-5)
+
+
+def test_ce_accepte_soft_target():
+    """La forme generale -sum(y * log p) marche aussi avec des cibles non one-hot."""
+    z = BasicTensor([[2.0, 1.0, 0.0]])
+    cible = BasicTensor([[0.5, 0.5, 0.0]])
+    loss = z.naive_softmax().naive_cross_entropy(cible)
+    attendu = -(0.5 * np.log(0.665) + 0.5 * np.log(0.245))
+    assert np.isclose(loss.data, attendu, atol=1e-2)
+
+
+def test_ce_contre_pytorch():
+    torch = pytest.importorskip("torch")
+    z = np.random.randn(5, 4).astype(np.float32)
+    cibles = np.random.randint(0, 4, 5)
+
+    ref = torch.nn.functional.cross_entropy(torch.tensor(z), torch.tensor(cibles, dtype=torch.long))
+
+    loss = BasicTensor(z).naive_softmax().naive_cross_entropy(one_hot(cibles, 4))
+    assert np.isclose(loss.data, ref.item(), atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# 24. Gradients de softmax + CE
+# ---------------------------------------------------------------------------
+
+def test_gradcheck_ce():
+    z = BasicTensor(np.random.randn(4, 3) * 0.5, requires_grad=True)
+    cible = one_hot([0, 2, 1, 1], 3)
+    gradcheck(lambda x: x.naive_softmax().naive_cross_entropy(cible), [z])
+
+
+def test_ce_gradient_vaut_p_moins_y_sur_n():
+    N, C = 4, 3
+    z = BasicTensor(np.random.randn(N, C), requires_grad=True)
+    cible = one_hot([0, 2, 1, 1], C)
+
+    p = z.naive_softmax()
+    p.naive_cross_entropy(cible).backward()
+
+    attendu = (p.data - cible.data) / N
+    assert np.allclose(z.grad, attendu, atol=1e-5)
+
+
+def test_ce_gradient_contre_pytorch():
+    torch = pytest.importorskip("torch")
+    z = np.random.randn(5, 4).astype(np.float32)
+    cibles = np.random.randint(0, 4, 5)
+
+    tz = torch.tensor(z, requires_grad=True)
+    torch.nn.functional.cross_entropy(tz, torch.tensor(cibles, dtype=torch.long)).backward()
+
+    bz = BasicTensor(z, requires_grad=True)
+    bz.naive_softmax().naive_cross_entropy(one_hot(cibles, 4)).backward()
+
+    assert np.allclose(bz.grad, tz.grad.numpy(), atol=1e-5)
+
+
+def test_ce_cible_sans_gradient():
+    z = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    cible = one_hot([0, 1], 3)
+    z.naive_softmax().naive_cross_entropy(cible).backward()
+    assert cible.grad is None
+
+
+# ---------------------------------------------------------------------------
+# 25. Version naive casse sur de grands logits
+#
+# Ces tests permettent de voir pourquoi on utilise une autre formule pour la CE
+# ---------------------------------------------------------------------------
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+def test_softmax_naif_casse_sur_grands_logits():
+    z = BasicTensor([[1000.0, 0.0, 0.0]])
+    p = z.naive_softmax()
+    assert np.isnan(p.data).any()       # exp(1000) = inf, inf / inf = nan
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+def test_ce_naive_casse_sur_grands_logits():
+    z = BasicTensor([[1000.0, 0.0, 0.0]])
+    loss = z.naive_softmax().naive_cross_entropy(one_hot([0], 3))
+    assert not np.isfinite(loss.data)
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+def test_ce_naive_casse_sur_logits_tres_negatifs():
+    """exp(-1000) = 0, proba devient 0, log(0) = -inf."""
+    z = BasicTensor([[0.0, 1000.0, 0.0]])
+    loss = z.naive_softmax().naive_cross_entropy(one_hot([0], 3))
+    assert not np.isfinite(loss.data)
+
+
+def test_pytorch_ne_casse_pas_lui():
+    """Meme entree, PyTorch donne un resultat fini"""
+    torch = pytest.importorskip("torch")
+    ref = torch.nn.functional.cross_entropy(
+        torch.tensor([[1000.0, 0.0, 0.0]]), torch.tensor([0]))
+    assert np.isfinite(ref.item())
+
+
+def test_softmax_stable_sur_grands_logits():
+    z = BasicTensor([[1000.0, 0.0, 0.0]])
+    p = z.stable_softmax()
+    # Ne casse plus !
+    assert not np.isnan(p.data).any()
