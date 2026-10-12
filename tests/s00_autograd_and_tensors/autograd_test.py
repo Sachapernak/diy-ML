@@ -4,9 +4,10 @@ Tests pour BasicTensor (autograd).
 import pytest
 import numpy as np
 
-from src.s00_autograd_and_tensors.autograd import BasicTensor
+from src.s00_autograd_and_tensors.autograd import BasicTensor, no_grad
 
-def gradcheck(f, entrees, eps=1e-2, tol=1e-2):
+
+def gradcheck(f, entrees, eps=1e-3, atol=1e-3, rtol=1e-2):
     """
     Vérifie les calcul de dérivées via le taux d'accroissement
 
@@ -19,9 +20,10 @@ def gradcheck(f, entrees, eps=1e-2, tol=1e-2):
 
     out = f(*entrees)
     out.backward()
-
+    i = -1
     # pour chaque tensors
-    for entree in entrees:
+    for i, entree in enumerate(entrees):
+
         num = np.zeros_like(entree.data) # resultat calcul
         grad_analytique = np.copy(entree.grad) # res du grad apres .backward
 
@@ -47,9 +49,12 @@ def gradcheck(f, entrees, eps=1e-2, tol=1e-2):
             num[idx] = (sortie_plus - sortie_moins) / (2 * eps)
 
         # check si les deux sont proches
-        assert np.allclose(grad_analytique, num, atol = tol)
 
-
+        ecart = np.abs(grad_analytique - num).max()
+        assert np.allclose(grad_analytique, num, rtol=rtol, atol=atol), (
+            f"gradcheck : entree {i}, ecart max {ecart:.2e}\n"
+            f"analytique :\n{grad_analytique}\nnumerique :\n{num}"
+        )
 
 # ---------------------------------------------------------------------------
 # 1. Construction
@@ -736,7 +741,7 @@ def test_maximum_egalite_un_seul_recoit():
 def test_gradcheck_maximum():
     a = BasicTensor(np.random.randn(2, 3) + 5.0, requires_grad=True)
     b = BasicTensor(np.random.randn(2, 3) - 5.0, requires_grad=True)
-    gradcheck(lambda x, y: x.maximum(y).sum(), [a, b], eps=1e-2, tol=1e-2)
+    gradcheck(lambda x, y: x.maximum(y).sum(), [a, b], eps=1e-2, atol=1e-2)
 
 
 def test_maximum_broadcast():
@@ -825,7 +830,7 @@ def test_gradcheck_deux_couches():
     x = BasicTensor(np.random.randn(4, 3), requires_grad=True)
     W1 = BasicTensor(np.random.randn(3, 5), requires_grad=True)
     W2 = BasicTensor(np.random.randn(5, 2), requires_grad=True)
-    gradcheck(lambda a, w1, w2: ((a @ w1).relu() @ w2).sum(), [x, W1, W2], tol=1e-2, eps=1e-2)
+    gradcheck(lambda a, w1, w2: ((a @ w1).relu() @ w2).sum(), [x, W1, W2], atol=1e-2, eps=1e-2)
 
 
 def test_mlp_contre_pytorch():
@@ -986,7 +991,7 @@ def test_exp_backward_egale_la_sortie():
 
 def test_gradcheck_exp():
     a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
-    gradcheck(lambda x: x.exp().sum(), [a], tol=1e-1, eps=1e-1)
+    gradcheck(lambda x: x.exp().sum(), [a], atol=1e-1, eps=1e-1)
 
 
 def test_exp_contre_pytorch():
@@ -1299,3 +1304,348 @@ def test_softmax_stable_sur_grands_logits():
     p = z.stable_softmax()
     # Ne casse plus !
     assert not np.isnan(p.data).any()
+
+# ---------------------------------------------------------------------------
+# 26. __getitem__
+# ---------------------------------------------------------------------------
+
+def test_getitem_forward():
+    x = BasicTensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assert np.allclose(x[1].data, [4.0, 5.0, 6.0])
+    assert np.allclose(x[:, 0].data, [1.0, 4.0])
+
+def test_getitem_backward_place_le_gradient():
+    x = BasicTensor([1.0, 2.0, 3.0, 4.0], requires_grad=True)
+    x[1].backward()
+    assert np.allclose(x.grad, [0.0, 1.0, 0.0, 0.0])
+
+def test_getitem_indices_repetes_accumulent():
+    """le meme indice deux fois doit s'add"""
+    x = BasicTensor([1.0, 2.0, 3.0, 4.0, 5.0], requires_grad=True)
+    y = x[np.array([1, 1, 3])]
+    (y * BasicTensor([10.0, 20.0, 30.0])).sum().backward()
+    assert np.allclose(x.grad, [0.0, 30.0, 0.0, 30.0, 0.0])
+
+def test_getitem_selection_par_ligne():
+    """CE: un element par ligne."""
+    x = BasicTensor(np.arange(6.0).reshape(2, 3), requires_grad=True)
+    y = x[np.arange(2), np.array([2, 0])]
+    assert np.allclose(y.data, [2.0, 3.0])
+    y.sum().backward()
+    assert np.allclose(x.grad, [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])
+
+def test_getitem_index_tensor():
+    x = BasicTensor([1.0, 2.0, 3.0], requires_grad=True)
+    idx = BasicTensor([2, 0])
+    assert np.allclose(x[idx].data, [3.0, 1.0])
+
+def test_gradcheck_getitem_slice():
+    x = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    gradcheck(lambda a: (a[1:, ::2] * a[1:, ::2]).sum(), [x])
+
+# ---------------------------------------------------------------------------
+# 27. transpose / swapaxes / .T
+# ---------------------------------------------------------------------------
+
+def test_transpose_forward():
+    x = BasicTensor(np.arange(6.0).reshape(2, 3))
+    assert x.T.data.shape == (3, 2)
+    assert np.allclose(x.T.data, np.arange(6.0).reshape(2, 3).T)
+
+def test_transpose_axes():
+    x = BasicTensor(np.random.randn(2, 3, 4))
+    assert x.transpose((2, 0, 1)).data.shape == (4, 2, 3)
+    assert x.transpose((-1, 0, 1)).data.shape == (4, 2, 3)
+
+def test_transpose_backward_shape():
+    x = BasicTensor(np.random.randn(2, 3, 4), requires_grad=True)
+    x.transpose((2, 0, 1)).sum().backward()
+    assert x.grad.shape == (2, 3, 4)
+
+def test_gradcheck_transpose_axes():
+    """Poids non symetriques"""
+    x = BasicTensor(np.random.randn(2, 3, 4), requires_grad=True)
+    w = BasicTensor(np.random.randn(4, 2, 3))
+    gradcheck(lambda a: (a.transpose((2, 0, 1)) * w).sum(), [x])
+
+def test_swapaxes():
+    x = BasicTensor(np.random.randn(2, 3, 4))
+    assert x.swapaxes(0, 2).data.shape == (4, 3, 2)
+    assert np.allclose(x.swapaxes(1, 2).data, np.swapaxes(x.data, 1, 2))
+
+def test_gradcheck_swapaxes():
+    x = BasicTensor(np.random.randn(2, 3, 4), requires_grad=True)
+    w = BasicTensor(np.random.randn(2, 4, 3))
+    gradcheck(lambda a: (a.swapaxes(1, 2) * w).sum(), [x])
+
+# ---------------------------------------------------------------------------
+# 28? reshape / flatten / squeeze / expand_dims
+# ---------------------------------------------------------------------------
+
+def test_reshape_forward():
+    x = BasicTensor(np.arange(6.0))
+    assert x.reshape(2, 3).data.shape == (2, 3)
+    assert x.reshape((3, 2)).data.shape == (3, 2)
+    assert x.reshape(-1, 2).data.shape == (3, 2)
+
+def test_gradcheck_reshape():
+    x = BasicTensor(np.random.randn(2, 6), requires_grad=True)
+    w = BasicTensor(np.random.randn(3, 4))
+    gradcheck(lambda a: (a.reshape(3, 4) * w).sum(), [x])
+
+def test_flatten():
+    x = BasicTensor(np.random.randn(5, 2, 3, 4))
+    assert x.flatten().data.shape == (5, 24)
+    assert x.flatten(start_axis=2).data.shape == (5, 2, 12)
+
+def test_flatten_backward_shape():
+    x = BasicTensor(np.random.randn(5, 2, 3), requires_grad=True)
+    x.flatten().sum().backward()
+    assert x.grad.shape == (5, 2, 3)
+
+def test_squeeze():
+    x = BasicTensor(np.random.randn(1, 2, 1, 3))
+    assert x.squeeze().data.shape == (2, 3)
+    assert x.squeeze(0).data.shape == (2, 1, 3)
+
+def test_expand_dims():
+    x = BasicTensor(np.random.randn(2, 3))
+    assert x.expand_dims(0).data.shape == (1, 2, 3)
+    assert x.expand_dims(-1).data.shape == (2, 3, 1)
+
+def test_squeeze_expand_dims_backward():
+    x = BasicTensor(np.random.randn(2, 3), requires_grad=True)
+    x.expand_dims(0).squeeze(0).sum().backward()
+    assert x.grad.shape == (2, 3)
+    assert np.allclose(x.grad, 1.0)
+
+# ---------------------------------------------------------------------------
+# 29. div / pow en primitives
+# ---------------------------------------------------------------------------
+
+def test_div_backward_valeurs():
+    """d(a/b)/da = 1/b, d(a/b)/db = -a/b^2"""
+    a = BasicTensor(6.0, requires_grad=True)
+    b = BasicTensor(2.0, requires_grad=True)
+    (a / b).backward()
+    assert np.isclose(a.grad, 0.5)
+    assert np.isclose(b.grad, -1.5)
+
+def test_div_par_constante():
+    a = BasicTensor([2.0, 4.0], requires_grad=True)
+    (a / 2.0).sum().backward()
+    assert np.allclose(a.grad, 0.5)
+
+def test_gradcheck_div_broadcast():
+    a = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    b = BasicTensor(np.random.rand(4) + 1.0, requires_grad=True)
+    gradcheck(lambda x, y: (x / y).sum(), [a, b])
+
+def test_pow_exposant_constant_sur_negatifs():
+    """Exposant sans requires_grad : pas de log calcule, donc pas de NaN."""
+    x = BasicTensor([-2.0, 3.0], requires_grad=True)
+    (x ** 2).sum().backward()
+    assert np.allclose(x.grad, [-4.0, 6.0])
+    assert not np.isnan(x.grad).any()
+
+def test_pow_backward_exposant():
+    """d(a^b)/db = a^b * ln(a)"""
+    a = BasicTensor(2.0)
+    b = BasicTensor(3.0, requires_grad=True)
+    (a ** b).backward()
+    assert np.isclose(b.grad, 8.0 * np.log(2.0), atol=1e-5)
+
+def test_gradcheck_pow_deux_entrees():
+    a = BasicTensor(np.random.rand(2, 3) + 1.0, requires_grad=True)
+    b = BasicTensor(np.random.rand(2, 3) + 0.5, requires_grad=True)
+    gradcheck(lambda x, y: (x ** y).sum(), [a, b])
+
+# ---------------------------------------------------------------------------
+# 30. Ops inversees
+# ---------------------------------------------------------------------------
+
+def test_radd_rmul():
+    x = BasicTensor([1.0, 2.0], requires_grad=True)
+    (2.0 + x * 1.0 + 3.0 * x).sum().backward()
+    assert np.allclose(x.grad, 4.0)
+
+def test_rsub_ordre_des_operandes():
+    x = BasicTensor([1.0, 2.0], requires_grad=True)
+    y = 5.0 - x
+    assert np.allclose(y.data, [4.0, 3.0])
+    y.sum().backward()
+    assert np.allclose(x.grad, -1.0)
+
+def test_rtruediv():
+    x = BasicTensor([1.0, 2.0], requires_grad=True)
+    y = 1.0 / x
+    assert np.allclose(y.data, [1.0, 0.5])
+    y.sum().backward()
+    assert np.allclose(x.grad, [-1.0, -0.25])  # -1/x^2
+
+def test_rpow():
+    x = BasicTensor([1.0, 3.0], requires_grad=True)
+    y = 2.0 ** x
+    assert np.allclose(y.data, [2.0, 8.0])
+    y.sum().backward()
+    assert np.allclose(x.grad, y.data * np.log(2.0), atol=1e-5)
+
+def test_rmatmul_ndarray():
+    """__array_priority__ doit forcer numpy a deleguer au tenseur."""
+    A = np.random.randn(2, 3).astype(np.float32)
+    x = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    y = A @ x
+    assert isinstance(y, BasicTensor)
+    assert np.allclose(y.data, A @ x.data, atol=1e-5)
+    y.sum().backward()
+    assert x.grad.shape == (3, 4)
+
+def test_ndarray_a_gauche_des_autres_ops():
+    a = np.array([1.0, 2.0], dtype=np.float32)
+    x = BasicTensor([3.0, 4.0], requires_grad=True)
+    for y in (a + x, a * x, a - x, a / x):
+        assert isinstance(y, BasicTensor)
+
+# ---------------------------------------------------------------------------
+# 31. lse / stable_softmax / log_softmax
+# ---------------------------------------------------------------------------
+
+def test_lse_valeur():
+    x = np.random.randn(3, 4).astype(np.float32)
+    attendu = np.log(np.exp(x).sum(axis=-1))
+    assert np.allclose(BasicTensor(x).lse().data, attendu, atol=1e-5)
+
+def test_lse_keepdims_shape():
+    x = BasicTensor(np.random.randn(3, 4))
+    assert x.lse().data.shape == (3,)
+    assert x.lse(keepdims=True).data.shape == (3, 1)
+
+def test_lse_grands_logits():
+    x = BasicTensor([[1000.0, 1000.0]])
+    assert np.isclose(x.lse().data[0], 1000.0 + np.log(2.0), atol=1e-3)
+
+def test_gradient_lse_est_le_softmax():
+    """d lse(z) / dz = softmax(z)"""
+    z = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    z.lse().sum().backward()
+    e = np.exp(z.data - z.data.max(axis=-1, keepdims=True))
+    assert np.allclose(z.grad, e / e.sum(axis=-1, keepdims=True), atol=1e-5)
+
+def test_stable_softmax_egal_naif_sur_petits_logits():
+    z = np.random.randn(3, 4).astype(np.float32)
+    assert np.allclose(BasicTensor(z).stable_softmax().data,
+                       BasicTensor(z).naive_softmax().data, atol=1e-6)
+
+def test_stable_softmax_grands_logits():
+    p = BasicTensor([[1000.0, 0.0, 0.0]]).stable_softmax().data
+    assert np.isfinite(p).all()
+    assert np.allclose(p, [[1.0, 0.0, 0.0]], atol=1e-6)
+
+def test_gradcheck_stable_softmax():
+    z = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    w = BasicTensor(np.random.randn(3, 4))
+    gradcheck(lambda x: (x.stable_softmax() * w).sum(), [z])
+
+def test_log_softmax_cas_qui_cassait():
+    z = BasicTensor([[0.0, 1000.0, 0.0]])
+    assert np.allclose(z.log_softmax().data, [[-1000.0, 0.0, -1000.0]])
+
+def test_log_softmax_egal_log_du_softmax():
+    z = np.random.randn(3, 4).astype(np.float32)
+    assert np.allclose(BasicTensor(z).log_softmax().data,
+                       np.log(BasicTensor(z).stable_softmax().data), atol=1e-5)
+
+def test_gradcheck_log_softmax():
+    z = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+    w = BasicTensor(np.random.randn(3, 4))
+    gradcheck(lambda x: (x.log_softmax() * w).sum(), [z])
+
+# ---------------------------------------------------------------------------
+# 32. cross_entropy (sur logits)
+# ---------------------------------------------------------------------------
+
+def _one_hot(indices, nb_classes):
+    m = np.zeros((len(indices), nb_classes), dtype=np.float32)
+    m[np.arange(len(indices)), indices] = 1.0
+    return BasicTensor(m)
+
+def test_cross_entropy_valeur_connue():
+    z = BasicTensor([[2.0, 1.0, 0.0]])
+    assert np.isclose(z.cross_entropy(_one_hot([0], 3)).data, 0.4076, atol=1e-3)
+
+def test_cross_entropy_grands_logits():
+    z = BasicTensor([[0.0, 1000.0, 0.0]])
+    loss = z.cross_entropy(_one_hot([0], 3))
+    assert np.isfinite(loss.data)
+    assert np.isclose(loss.data, 1000.0)
+
+def test_cross_entropy_gradient_p_moins_y():
+    N, C = 4, 3
+    z = BasicTensor(np.random.randn(N, C), requires_grad=True)
+    y = _one_hot([0, 2, 1, 1], C)
+    z.cross_entropy(y).backward()
+    e = np.exp(z.data - z.data.max(axis=-1, keepdims=True))
+    p = e / e.sum(axis=-1, keepdims=True)
+    assert np.allclose(z.grad, (p - y.data) / N, atol=1e-5)
+
+def test_cross_entropy_contre_pytorch():
+    torch = pytest.importorskip("torch")
+    z = np.random.randn(5, 4).astype(np.float32)
+    cibles = np.random.randint(0, 4, 5)
+
+    tz = torch.tensor(z, requires_grad=True)
+    ref = torch.nn.functional.cross_entropy(tz, torch.tensor(cibles, dtype=torch.long))
+    ref.backward()
+
+    bz = BasicTensor(z, requires_grad=True)
+    loss = bz.cross_entropy(_one_hot(cibles, 4))
+    loss.backward()
+
+    assert np.isclose(loss.data, ref.item(), atol=1e-5)
+    assert np.allclose(bz.grad, tz.grad.numpy(), atol=1e-5)
+
+# ---------------------------------------------------------------------------
+# 33. detach / no_grad
+# ---------------------------------------------------------------------------
+
+def test_detach_coupe_le_graphe():
+    x = BasicTensor([1.0, 2.0], requires_grad=True)
+    d = x.detach()
+    assert not d.requires_grad
+    assert d.parents == []
+    assert np.allclose(d.data, x.data)
+
+def test_detach_bloque_le_gradient():
+    """y = x * detach(x) : seule la branche non detachee donne du gradient."""
+    x = BasicTensor([3.0], requires_grad=True)
+    (x * x.detach()).sum().backward()
+    assert np.allclose(x.grad, [3.0])  # et pas 6 = 2x
+
+def test_no_grad_ne_construit_pas_de_graphe():
+    x = BasicTensor([1.0, 2.0], requires_grad=True)
+    with no_grad():
+        y = (x * 2.0).sum()
+    assert not y.requires_grad
+    assert y.parents == []
+    assert y._backward is None
+
+def test_no_grad_restaure_apres():
+    x = BasicTensor([1.0], requires_grad=True)
+    with no_grad():
+        pass
+    assert (x * 2.0).requires_grad
+
+def test_no_grad_imbrique():
+    x = BasicTensor([1.0], requires_grad=True)
+    with no_grad():
+        with no_grad():
+            pass
+        assert not (x * 2.0).requires_grad
+    assert (x * 2.0).requires_grad
+
+def test_no_grad_restaure_meme_apres_exception():
+    x = BasicTensor([1.0], requires_grad=True)
+    with pytest.raises(RuntimeError):
+        with no_grad():
+            raise RuntimeError
+    assert (x * 2.0).requires_grad

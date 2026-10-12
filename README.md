@@ -20,20 +20,20 @@ standard quand le but devient d'aller plus loin plutôt que de passer son temps 
 
 ## Avancement
 
-| #  | Étape                                      | Statut          |
-|----|--------------------------------------------|-----------------|
-| 00 | Tensor + autograd                          | Presque terminé |
-| 01 | Module, Linear, initialisation             | À faire         |
-| 02 | Optimiseurs et boucle d'entraînement       | À faire         |
-| 03 | MLP sur MNIST ?                            | À faire         |
-| 04 | Embedding                                  | À faire         |
-| 05 | MLP sur fenêtre de N tokens                | À faire         |
-| 06 | CNN basique                                | À faire         |
-| 07 | Attention une tête + masque causal         | À faire         |
-| 08 | Bloc complet (multi-head, LN, résiduelles) | À faire         |
-| 09 | Positions (apprises, puis RoPE)            | À faire         |
-| 10 | GPT char-level + génération                | À faire         |
-| 11 | BPE, KV cache, top-k / top-p               | À faire         |
+| #  | Étape                                      | Statut  |
+|----|--------------------------------------------|---------|
+| 00 | Tensor + autograd                          | Fini    |
+| 01 | Module, Linear, initialisation             | Début   |
+| 02 | Optimiseurs et boucle d'entraînement       | À faire |
+| 03 | MLP sur MNIST ?                            | À faire |
+| 04 | Embedding                                  | À faire |
+| 05 | MLP sur fenêtre de N tokens                | À faire |
+| 06 | CNN basique                                | À faire |
+| 07 | Attention une tête + masque causal         | À faire |
+| 08 | Bloc complet (multi-head, LN, résiduelles) | À faire |
+| 09 | Positions (apprises, puis RoPE)            | À faire |
+| 10 | GPT char-level + génération                | À faire |
+| 11 | BPE, KV cache, top-k / top-p               | À faire |
 
 Le détail est dans `todo.md`.
 

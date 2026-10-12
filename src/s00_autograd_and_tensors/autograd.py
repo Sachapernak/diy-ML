@@ -521,7 +521,7 @@ class BasicTensor:
         Utilisation du log-sum-exp trick pour eviter que ca explose.
         Soustraire le max ne change pas le grad car LSE dépend pas du max choisi
         """
-        max_logits = self.max(axis=axis, keepdims=True).detach()
+        max_logits = np.max(self.data, axis=axis, keepdims=True)
 
         out = self.sub(max_logits).exp().sum(axis=axis, keepdims=True).log().add(max_logits)
 
@@ -545,7 +545,7 @@ class BasicTensor:
         -> Utile pour calculer les vraies probabilitiés
         """
         # Recup de la valeur max
-        max_logits = self.max(axis=-1, keepdims=True).detach() # detach pour pas calculer le grad
+        max_logits = np.max(self.data, axis=-1, keepdims=True)
 
         # Soustraction du max (les vals valent <= 0, donc e^x <= 1)
         exp_logits = self.sub(max_logits).exp()
@@ -557,6 +557,7 @@ class BasicTensor:
         """
         Version stable pour logits grand et petit
         Renvoie la log-probabilitée entre (-inf, 0], sans underflow et overflow
+        Permet de transformer des logits en des proba
         -> Utile pour le calcul de loss
         """
         return self.sub(self.lse(axis=axis, keepdims=True))
@@ -568,6 +569,12 @@ class BasicTensor:
         # Pour prendre en compte les batchs on fait mean(H(P,Q))
 
         return  self.log().mul(target).sum(axis = -1).neg().mean()
+
+    def cross_entropy(self, target):
+        # H(P,Q) = - Sum ( log_softmax( Q(x) ) * P(x) )
+        # P(x) : vrai proba
+        # Q(x) : logits
+        return self.log_softmax().mul(target).sum(axis=-1).neg().mean()
 
     # ================ OP de forme
 
@@ -702,7 +709,7 @@ class BasicTensor:
     # =============
 
 
-    def _tri_topo(self, seen, res):
+    def _tri_topo_rec(self, seen, res):
         """
         Tri topologique récursif basé sur un parcours en profondeur "post-order" (on ajoute après les parents)
 
@@ -714,9 +721,26 @@ class BasicTensor:
         if self not in seen and self.requires_grad:
             seen.add(self)
             for parent in self.parents:
-                parent._tri_topo(seen, res)
+                parent._tri_topo_rec(seen, res)
             res.append(self)
 
+
+    def _backward_order_rec(self):
+        """
+        Construit l'ordre de visite pour backward.
+
+        Le Tensor connait ses parents, ce qui permet de créer un graph "DAG" (directed acyclic graph).
+        En faisant l'inverse d'un tri topologique, on obtient l'ordre pour backward
+
+        Version recursive qui peut casser pour les arbres profonds
+
+        """
+        seen = set()
+        res = list()
+
+        self._tri_topo_rec(seen, res)
+
+        return res[::-1]
 
     def _backward_order(self):
         """
@@ -725,13 +749,33 @@ class BasicTensor:
         Le Tensor connait ses parents, ce qui permet de créer un graph "DAG" (directed acyclic graph).
         En faisant l'inverse d'un tri topologique, on obtient l'ordre pour backward
 
+        Version itérative
         """
-        seen = set()
-        res = list()
+        vus = set() # check si on a déjà vu le noeud
+        ordre = [] # ordre a renvoyer
+        pile = [(self, False)] # les noeuds + si on a déjà traité les parents
 
-        self._tri_topo(seen, res)
+        while pile:
+            noeud, parents_traites = pile.pop()
 
-        return res[::-1]
+            if parents_traites:
+                # Tous les parents sont déjà dans ordre : on peut enfin l'ajouter
+                ordre.append(noeud)
+                continue
+
+            if noeud in vus or not noeud.requires_grad: # check si on a déjà traité le noeud ou si il est hors du graph
+                continue
+
+            # == Noeud pas vu, qui a besoins de grade, et dont les parents sont pas traités
+            vus.add(noeud) # On le rajoute
+
+            # Revenir sur le noeud après les parents (pile LIFO)
+            pile.append((noeud, True))
+
+            for parent in noeud.parents:
+                pile.append((parent, False))
+
+        return ordre[::-1] # remise dans le bon ordre
 
 
     def _accumulate(self, contribution: np.ndarray) -> None:
