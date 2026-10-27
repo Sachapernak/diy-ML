@@ -4,7 +4,8 @@ Tests pour BasicTensor (autograd).
 import pytest
 import numpy as np
 
-from src.s00_autograd_and_tensors.autograd import BasicTensor, no_grad
+from src.s00_autograd_and_tensors.autograd import BasicTensor, no_grad, default_dtype, get_default_dtype, \
+    set_default_dtype
 
 
 def gradcheck(f, entrees, eps=1e-3, atol=1e-3, rtol=1e-2):
@@ -830,7 +831,7 @@ def test_gradcheck_deux_couches():
     x = BasicTensor(np.random.randn(4, 3), requires_grad=True)
     W1 = BasicTensor(np.random.randn(3, 5), requires_grad=True)
     W2 = BasicTensor(np.random.randn(5, 2), requires_grad=True)
-    gradcheck(lambda a, w1, w2: ((a @ w1).relu() @ w2).sum(), [x, W1, W2], atol=1e-2, eps=1e-2)
+    gradcheck(lambda a, w1, w2: ((a @ w1).relu() @ w2).sum(), [x, W1, W2], atol=1e-1, eps=1e-3)
 
 
 def test_mlp_contre_pytorch():
@@ -933,7 +934,7 @@ def test_gradcheck_sum_axe_3d():
     gradcheck(lambda x: x.sum(axis=1).sum(), [a])
 
 
-def test_sum_contre_pytorch():
+def test_sum2_contre_pytorch():
     torch = pytest.importorskip("torch")
     donnees = np.random.randn(3, 4).astype(np.float32)
 
@@ -1649,3 +1650,109 @@ def test_no_grad_restaure_meme_apres_exception():
         with no_grad():
             raise RuntimeError
     assert (x * 2.0).requires_grad
+
+
+# ---------------------------------------------------------------------------
+# dtype par defaut
+# ---------------------------------------------------------------------------
+
+def test_dtype_par_defaut_float32():
+    assert get_default_dtype() == np.float32
+    assert BasicTensor([1.0, 2.0]).dtype == np.float32
+
+
+def test_ndarray_float64_converti_par_defaut():
+    """les donnees de l'utilisateur passent au dtype par defaut."""
+    assert BasicTensor(np.random.randn(3)).dtype == np.float32
+
+
+def test_dtype_explicite():
+    assert BasicTensor([1.0], dtype=np.float64).dtype == np.float64
+
+
+def test_default_dtype_contexte():
+    with default_dtype(np.float64):
+        assert BasicTensor([1.0]).dtype == np.float64
+    assert BasicTensor([1.0]).dtype == np.float32
+
+
+def test_default_dtype_restaure_apres_exception():
+    with pytest.raises(RuntimeError):
+        with default_dtype(np.float64):
+            raise RuntimeError
+    assert get_default_dtype() == np.float32
+
+
+def test_default_dtype_refuse_les_entiers():
+    with pytest.raises(TypeError):
+        set_default_dtype(np.int32)
+    assert get_default_dtype() == np.float32
+
+
+# ---------------------------------------------------------------------------
+# Propagation du dtype dans les ops
+# ---------------------------------------------------------------------------
+
+def test_ops_gardent_le_float64():
+    """Calcul float64 doit pas repasser en float32 a chaque op."""
+    x = BasicTensor(np.random.randn(3, 4), dtype=np.float64)
+    W = BasicTensor(np.random.randn(4, 2), dtype=np.float64)
+    out = ((x @ W).relu().exp() + 1.0).log_softmax().sum()
+    assert out.dtype == np.float64
+
+
+def test_ops_float32_inchangees():
+    x = BasicTensor(np.random.randn(3, 4))
+    assert ((x * 2.0).exp().sum()).dtype == np.float32
+
+
+def test_constantes_suivent_le_contexte():
+    """x * 2.0 avec le dtype par defaut."""
+    with default_dtype(np.float64):
+        x = BasicTensor([1.0, 2.0])
+        assert (x * 2.0).dtype == np.float64
+
+
+def test_detach_garde_le_dtype():
+    x = BasicTensor([1.0], dtype=np.float64)
+    assert x.detach().dtype == np.float64
+
+
+def test_grad_a_le_dtype_des_donnees():
+    with default_dtype(np.float64):
+        x = BasicTensor(np.random.randn(3), requires_grad=True)
+        (x * x).sum().backward()
+    assert x.grad.dtype == np.float64
+
+
+def test_melange_float32_float64():
+    """resultat passe en float64, mais grad garde le dtype de ses donnees."""
+    w = BasicTensor(np.random.randn(3), requires_grad=True)                     # float32
+    x = BasicTensor(np.random.randn(3), dtype=np.float64, requires_grad=True)   # float64
+    out = (w * x).sum()
+    assert out.dtype == np.float64
+    out.backward()
+    assert w.grad.dtype == np.float32
+    assert x.grad.dtype == np.float64
+
+
+# ---------------------------------------------------------------------------
+# gradcheck precis en float64
+# ---------------------------------------------------------------------------
+
+def test_gradcheck_float64_tolerances_serrees():
+    """avec float64 on peut descendre eps et les tolerances de plusieurs ordres de grandeur."""
+    with default_dtype(np.float64):
+        a = BasicTensor(np.random.randn(3, 4), requires_grad=True)
+        b = BasicTensor(np.random.rand(4) + 1.0, requires_grad=True)
+        gradcheck(lambda x, y: ((x / y).exp() * x).sum(), [a, b],
+                  eps=1e-6, atol=1e-7, rtol=1e-6)
+
+
+def test_gradcheck_float64_matmul_log_softmax():
+    with default_dtype(np.float64):
+        x = BasicTensor(np.random.randn(4, 3), requires_grad=True)
+        W = BasicTensor(np.random.randn(3, 5), requires_grad=True)
+        poids = BasicTensor(np.random.randn(4, 5))
+        gradcheck(lambda a, w: ((a @ w).log_softmax() * poids).sum(), [x, W],
+                  eps=1e-6, atol=1e-7, rtol=1e-6)

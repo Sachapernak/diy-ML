@@ -18,7 +18,47 @@ def no_grad():
         _GRAD_ENABLED = previous
 
 
-def unbroadcast(array : np.ndarray, shape) -> np.ndarray:
+# =============
+# dtype par défaut
+# =============
+# Le type utilisé quand on crée un tensor sans préciser de dtype.
+_DEFAULT_DTYPE = np.float32
+
+
+def get_default_dtype():
+    return _DEFAULT_DTYPE
+
+
+def set_default_dtype(dtype):
+    """
+    Change le dtype par défaut des tensors créés ensuite.
+    Seuls les flottants sont acceptés : un gradient n'a pas de sens sur des entiers.
+    """
+    global _DEFAULT_DTYPE
+    dtype = np.dtype(dtype)
+    if not np.issubdtype(dtype, np.floating):
+        raise TypeError(f"Le dtype par défaut doit être flottant, pas {dtype}")
+    _DEFAULT_DTYPE = dtype.type
+
+
+@contextmanager
+def default_dtype(dtype):
+    """
+    Change le dtype par défaut le temps d'un bloc, puis restaure l'ancien.
+
+    ex :
+        with default_dtype(np.float64):
+            x = BasicTensor([1.0, 2.0])   # float64
+    """
+    previous = _DEFAULT_DTYPE
+    set_default_dtype(dtype)
+    try:
+        yield
+    finally:
+        set_default_dtype(previous)
+
+
+def unbroadcast(array: np.ndarray, shape) -> np.ndarray:
     """
     Fait l'inverse du broadcast en accumulant les résultats sur les axes restants
 
@@ -68,14 +108,26 @@ class BasicTensor:
     requires_grad: bool
     _backward: Callable[[], None] | None
 
-    __array_priority__ = 1000 # pour eviter d'utiliser l'op numpy au lieu de celle du tensor
+    __array_priority__ = 1000  # pour eviter d'utiliser l'op numpy au lieu de celle du tensor
 
-    def __init__(self, data, requires_grad=False):
-        self.data = np.asarray(data, dtype=np.float32)
+    def __init__(self, data, requires_grad=False, dtype=None):
+        # dtype explicite, sinon le dtype par défaut (float32 sauf changement)
+        self.data = np.asarray(data, dtype=dtype if dtype is not None else _DEFAULT_DTYPE)
         self.requires_grad = requires_grad
-        self._backward = None # La fonction de backward
+        self._backward = None  # La fonction de backward
         self.parents = []
         self.grad = None
+
+    @staticmethod
+    def _from_op(data):
+        """
+        Construit le résultat d'une op en gardant le dtype calculé par NumPy.
+        """
+        return BasicTensor(data, dtype=np.asarray(data).dtype)
+
+    @property
+    def dtype(self):
+        return self.data.dtype
 
     def backward(self):
         """
@@ -105,8 +157,8 @@ class BasicTensor:
         self.grad = None
 
     def detach(self):
-        return BasicTensor(self.data, requires_grad=False)
-    
+        return BasicTensor(self.data, requires_grad=False, dtype=self.data.dtype)
+
     @staticmethod
     def _needs_grad(*tensors):
         return _GRAD_ENABLED and any(t.requires_grad for t in tensors)
@@ -121,7 +173,7 @@ class BasicTensor:
 
         data = op(self.data, other.data)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self, other):
             out.requires_grad = True
@@ -153,10 +205,9 @@ class BasicTensor:
 
         data = op(self.data, other.data)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self, other):
-
             out.requires_grad = True
             out.parents = [self, other]
 
@@ -176,10 +227,9 @@ class BasicTensor:
     def __neg__(self):
         data = np.negative(self.data)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self):
-
             out.requires_grad = True
             out.parents = [self]
 
@@ -199,10 +249,9 @@ class BasicTensor:
 
         data = op(self.data, other.data)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self, other):
-
             out.requires_grad = True
             out.parents = [self, other]
 
@@ -216,7 +265,6 @@ class BasicTensor:
 
         return out
 
-
     def __matmul__(self, other):
         if not isinstance(other, BasicTensor):
             other = BasicTensor(other)
@@ -225,10 +273,9 @@ class BasicTensor:
 
         data = op(self.data, other.data)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self, other):
-
             out.requires_grad = True
             out.parents = [self, other]
 
@@ -238,7 +285,6 @@ class BasicTensor:
             # grad_B = A.T @ grad
 
             def _backward():
-
                 self._accumulate(unbroadcast(np.matmul(out.grad, np.swapaxes(other.data, -1, -2)),
                                              self.data.shape))
                 other._accumulate(unbroadcast(np.matmul(np.swapaxes(self.data, -1, -2), out.grad),
@@ -256,7 +302,7 @@ class BasicTensor:
 
         data = op(self.data, other.data)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self, other):
             out.requires_grad = True
@@ -271,7 +317,8 @@ class BasicTensor:
                 if self.requires_grad:
                     self._accumulate(unbroadcast(out.grad * (1 / other.data), self.data.shape))
                 if other.requires_grad:
-                    other._accumulate(unbroadcast(out.grad * (-np.divide(self.data, np.power(other.data, 2))), other.data.shape))
+                    other._accumulate(
+                        unbroadcast(out.grad * (-np.divide(self.data, np.power(other.data, 2))), other.data.shape))
 
             out._backward = _backward
         return out
@@ -284,7 +331,7 @@ class BasicTensor:
 
         data = op(self.data, other.data)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self, other):
 
@@ -296,8 +343,9 @@ class BasicTensor:
                 # a = ba^(b-1)
                 # b = a^b * ln(a)
                 if self.requires_grad:
-                    self._accumulate(unbroadcast(out.grad * other.data * np.power(self.data, np.subtract(other.data, 1)),
-                                             self.data.shape))
+                    self._accumulate(
+                        unbroadcast(out.grad * other.data * np.power(self.data, np.subtract(other.data, 1)),
+                                    self.data.shape))
                 if other.requires_grad:
                     other._accumulate(unbroadcast(out.grad * out.data * np.log(self.data),
                                                   other.data.shape))
@@ -338,9 +386,8 @@ class BasicTensor:
     def mul(self, other):
         return self.__mul__(other)
 
-    def add(self,other):
+    def add(self, other):
         return self.__add__(other)
-
 
     def sum(self, axis=None, keepdims=False):
         """
@@ -349,7 +396,7 @@ class BasicTensor:
 
         data = np.sum(self.data, axis=axis, keepdims=keepdims)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self):
             out.requires_grad = True
@@ -374,7 +421,6 @@ class BasicTensor:
 
         return out
 
-
     def matmul(self, other):
         return self.__matmul__(other)
 
@@ -393,7 +439,7 @@ class BasicTensor:
         """
         data = np.exp(self.data)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self):
             out.requires_grad = True
@@ -413,10 +459,9 @@ class BasicTensor:
 
         data = np.maximum(0, self.data)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self):
-
             out.requires_grad = True
             out.parents = [self]
 
@@ -435,10 +480,9 @@ class BasicTensor:
 
         data = op(self.data, other.data)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self, other):
-
             out.requires_grad = True
             out.parents = [self, other]
 
@@ -454,7 +498,7 @@ class BasicTensor:
 
         data = np.max(self.data, axis=axis, keepdims=keepdims)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self):
             out.requires_grad = True
@@ -494,14 +538,13 @@ class BasicTensor:
 
         return self.sum(axis=axis, keepdims=keepdims) * (1.0 / n)
 
-
     def log(self):
         """
         ln, elem par elem
         """
         data = np.log(self.data)
 
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self):
             out.requires_grad = True
@@ -537,7 +580,6 @@ class BasicTensor:
         self_exp = self.exp()
         return self_exp.div(self_exp.sum(axis=-1, keepdims=True))
 
-
     def stable_softmax(self):
         """
         Version du softmax qui casse pas avec les logits grand.
@@ -568,7 +610,7 @@ class BasicTensor:
         # Q(x) : ce qu'on à calculé
         # Pour prendre en compte les batchs on fait mean(H(P,Q))
 
-        return  self.log().mul(target).sum(axis = -1).neg().mean()
+        return self.log().mul(target).sum(axis=-1).neg().mean()
 
     def cross_entropy(self, target):
         # H(P,Q) = - Sum ( log_softmax( Q(x) ) * P(x) )
@@ -577,6 +619,13 @@ class BasicTensor:
         return self.log_softmax().mul(target).sum(axis=-1).neg().mean()
 
     # ================ OP de forme
+    @property
+    def shape(self):
+        return self.data.shape
+
+    @property
+    def size(self):
+        return self.data.size
 
     def reshape(self, *shape):
         """
@@ -584,7 +633,7 @@ class BasicTensor:
         """
         # Change la shape, tant qu'elle est compatible
         data = self.data.reshape(*shape)
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self):
             out.requires_grad = True
@@ -637,7 +686,7 @@ class BasicTensor:
         axes = tuple(a % self.data.ndim for a in axes)
 
         data = np.transpose(self.data, axes)
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self):
             out.requires_grad = True
@@ -679,7 +728,7 @@ class BasicTensor:
             idx = tuple(i.data.astype(np.int64) if isinstance(i, BasicTensor) else i for i in index)
 
         data = self.data[idx]
-        out = BasicTensor(data)
+        out = BasicTensor._from_op(data)
 
         if BasicTensor._needs_grad(self):
             out.requires_grad = True
@@ -703,11 +752,9 @@ class BasicTensor:
 
         return out
 
-
     # =============
     # fonctions internes
     # =============
-
 
     def _tri_topo_rec(self, seen, res):
         """
@@ -723,7 +770,6 @@ class BasicTensor:
             for parent in self.parents:
                 parent._tri_topo_rec(seen, res)
             res.append(self)
-
 
     def _backward_order_rec(self):
         """
@@ -751,9 +797,9 @@ class BasicTensor:
 
         Version itérative
         """
-        vus = set() # check si on a déjà vu le noeud
-        ordre = [] # ordre a renvoyer
-        pile = [(self, False)] # les noeuds + si on a déjà traité les parents
+        vus = set()  # check si on a déjà vu le noeud
+        ordre = []  # ordre a renvoyer
+        pile = [(self, False)]  # les noeuds + si on a déjà traité les parents
 
         while pile:
             noeud, parents_traites = pile.pop()
@@ -763,11 +809,11 @@ class BasicTensor:
                 ordre.append(noeud)
                 continue
 
-            if noeud in vus or not noeud.requires_grad: # check si on a déjà traité le noeud ou si il est hors du graph
+            if noeud in vus or not noeud.requires_grad:  # check si on a déjà traité le noeud ou si il est hors du graph
                 continue
 
             # == Noeud pas vu, qui a besoins de grade, et dont les parents sont pas traités
-            vus.add(noeud) # On le rajoute
+            vus.add(noeud)  # On le rajoute
 
             # Revenir sur le noeud après les parents (pile LIFO)
             pile.append((noeud, True))
@@ -775,8 +821,7 @@ class BasicTensor:
             for parent in noeud.parents:
                 pile.append((parent, False))
 
-        return ordre[::-1] # remise dans le bon ordre
-
+        return ordre[::-1]  # remise dans le bon ordre
 
     def _accumulate(self, contribution: np.ndarray) -> None:
         """
@@ -794,9 +839,10 @@ class BasicTensor:
             f"grad shape {contribution.shape} != data shape {self.data.shape}"
         )
 
+        # Le gradient a toujours le dtype de ses données (meme si des dtypes ont été mélangés)
+        contribution = np.asarray(contribution, dtype=self.data.dtype)
+
         if self.grad is None:
             self.grad = contribution.copy()
         else:
             self.grad += contribution
-
-
