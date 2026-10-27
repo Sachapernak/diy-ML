@@ -20,20 +20,20 @@ standard quand le but devient d'aller plus loin plutôt que de passer son temps 
 
 ## Avancement
 
-| #  | Étape                                      | Statut  |
-|----|--------------------------------------------|---------|
-| 00 | Tensor + autograd                          | Fini    |
-| 01 | Module, Linear, initialisation             | Début   |
-| 02 | Optimiseurs et boucle d'entraînement       | À faire |
-| 03 | MLP sur MNIST ?                            | À faire |
-| 04 | Embedding                                  | À faire |
-| 05 | MLP sur fenêtre de N tokens                | À faire |
-| 06 | CNN basique                                | À faire |
-| 07 | Attention une tête + masque causal         | À faire |
-| 08 | Bloc complet (multi-head, LN, résiduelles) | À faire |
-| 09 | Positions (apprises, puis RoPE)            | À faire |
-| 10 | GPT char-level + génération                | À faire |
-| 11 | BPE, KV cache, top-k / top-p               | À faire |
+| #  | Étape                                      | Statut   |
+|----|--------------------------------------------|----------|
+| 00 | Tensor + autograd                          | Fini     |
+| 01 | Module, Linear, initialisation             | En cours |
+| 02 | Optimiseurs et boucle d'entraînement       | À faire  |
+| 03 | MLP sur MNIST ?                            | À faire  |
+| 04 | Embedding                                  | À faire  |
+| 05 | MLP sur fenêtre de N tokens                | À faire  |
+| 06 | CNN basique                                | À faire  |
+| 07 | Attention une tête + masque causal         | À faire  |
+| 08 | Bloc complet (multi-head, LN, résiduelles) | À faire  |
+| 09 | Positions (apprises, puis RoPE)            | À faire  |
+| 10 | GPT char-level + génération                | À faire  |
+| 11 | BPE, KV cache, top-k / top-p               | À faire  |
 
 Le détail est dans `todo.md`.
 
@@ -69,6 +69,24 @@ Opérations disponibles : `+ − * / ** @`, négation, `sum` et `mean` sur un ou
 A comprendre plus profondément :
 - Pourquoi le backward est un produit jacobienne-vecteur qui ne construit jamais la jacobienne.
 
+## Étape 01 : Module, Linear et layers
+
+### `BasicModule` : équivalent à `nn.Module` de PyTorch
+
+- Un arbre de modules : chaque module peut contenir des sous-modules et des paramètres.
+- Enregistrement automatique par `__setattr__` : écrire `self.fc1 = Linear(...)` ou `self.W = BasicParameter(...)`. Réaffecter un attribut met à jour l'enregistrement.
+- `parameters()` renvoie tous les paramètres du modèle, récursivement. Un poids partagé entre plusieurs modules n'est renvoyé qu'une fois.
+- `children()` et `apply()` parcourent l'arbre, avec la même déduplication pour un module enregistré à plusieurs endroits.
+- Accès par chemin : `get_submodule("bloc.fc1")`, `get_subparam("bloc.fc1.W")`.
+- `train()` / `eval()` propagent le mode à tous les sous-modules (utile pour le Dropout et la BatchNorm).
+- `zero_grad()` remet à zéro les gradients de tous les paramètres.
+- `monModule(x)` permet de faire directement `monModule.forward(x)`.
+
+### `BasicParameter`
+
+Une sous-classe de `BasicTensor`, avec `requires_grad=True` par défaut. Permet au module de distinguer un poids d'une activation.
+
+
 ## Exemple
 
 ```python
@@ -103,7 +121,7 @@ comme référence dans les tests. Il sera utilisé pour entrainer les modèles.
 uv run pytest
 ```
 
-Déjà plus de 300 tests, construit de différentes manières :
+Déjà plus de 400 tests, construit de différentes manières :
 
 - Tests vs NumPy pour le `BasicNDArray` : test si avec les mêmes données on a les mêmes résultats, y compris après transpose et broadcast.
 - Tests vs PyTorch pour l'autograd : mêmes chose qu'au dessus.
@@ -120,11 +138,16 @@ src/
   s00_autograd_and_tensors/
     basic_nd_array.py    # tableau n-d à strides, en Python pur
     autograd.py          # BasicTensor, unbroadcast, no_grad
+  s01_module_and_init/
+    module.py            # Module de base
+    layers.py            # Modules spécifiques (ex : Linear...)
 tests/
   s00_autograd_and_tensors/
     basic_nd_array_test.py
     autograd_test.py
     unbroadcast_test.py
+  s01_module_and_init/
+    module_test.py
 ```
 
 

@@ -3,7 +3,7 @@
 | #  | Bloc                                          | Pourquoi                                                    | Avancement |
 |----|-----------------------------------------------|-------------------------------------------------------------|------------|
 | 00 | Tensor + autograd                             | Les briques de calcul et le backward                        | FINI       |
-| 01 | Module, Linear, init                          | Des modèles avec des paramètres à entraîner                 | -          |
+| 01 | Module, Linear, init                          | Des modèles avec des paramètres à entraîner                 | En cours   |
 | 02 | SGD → momentum → Adam + boucle d'entraînement | Entraîner pour de vrai, premier jalon : XOR qui converge    | -          |
 | 03 | MLP sur MNIST                                 | NN de base                                                  | -          |
 | 04 | Embedding + bigramme char-level               | Comprendre du texte                                         | -          |
@@ -45,10 +45,9 @@
 ## 01 · Module, Linear, init
 
 ### Fait
-- [ ]
+- [ ] Module basic
 ### Todo
-- [ ] Qui décide quels tenseurs sont des paramètres ? (a voir avant l'optimiseur)
-- [ ] `Linear` : `x @ W + b`
+- [ ] Module `Linear` : `x @ W + b`
 - [ ] Init He / Xavier, puis casser volontairement (zéro, trop grande, trop petite) et regarder les activations couche par couche
 
 ## 02 · Optimiseurs et boucle d'entraînement
