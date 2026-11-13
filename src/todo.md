@@ -42,13 +42,15 @@
 - Le `BasicNDArray` n'a pas d'arithmétique élément par élément : l'autograd tourne sur NumPy (aussi pour des raisons de performances)
 
 
-## 01 · Module, Linear, init
+## 01 · Module, Linear, init 
 
 ### Fait
-- [ ] Module basic
+- [x] Module basic
+- [x] Module `Linear` : `x @ W + b`
+- [x] Init He / Xavier
 ### Todo
-- [ ] Module `Linear` : `x @ W + b`
-- [ ] Init He / Xavier, puis casser volontairement (zéro, trop grande, trop petite) et regarder les activations couche par couche
+
+- [ ] Tester les init
 
 ## 02 · Optimiseurs et boucle d'entraînement
 

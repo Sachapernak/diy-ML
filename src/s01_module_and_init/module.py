@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 from src.s00_autograd_and_tensors.autograd import BasicTensor
 
 class BasicParameter(BasicTensor):
@@ -9,7 +8,6 @@ class BasicParameter(BasicTensor):
 
 
 class BasicModule:
-
     def __init__(self):
         self._children = {}
         self._parameters = {}
@@ -153,6 +151,20 @@ class BasicModule:
     def forward(self, *args, **kwargs):
         raise NotImplementedError("Forward n'est pas défini pour ce module.")
 
+    # Dans BasicModule
+
+    def reset_parameters(self):
+        """
+        Reninitialise les paramètre du module. Par défaut ne fait rien et doit etre implémenté par les
+        modules concrets
+        """
+        pass
+
+    def reset_all_parameters(self):
+        """Réinitialise tous les paramètres du modèle."""
+        return self.apply(lambda m: m.reset_parameters())
+
+
     def __setattr__(self, name, value):
         super().__setattr__(name, value)
 
@@ -175,5 +187,4 @@ class BasicModule:
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
-
 
