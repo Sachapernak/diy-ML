@@ -3,8 +3,8 @@
 | #  | Bloc                                          | Pourquoi                                                    | Avancement |
 |----|-----------------------------------------------|-------------------------------------------------------------|------------|
 | 00 | Tensor + autograd                             | Les briques de calcul et le backward                        | FINI       |
-| 01 | Module, Linear, init                          | Des modèles avec des paramètres à entraîner                 | En cours   |
-| 02 | SGD → momentum → Adam + boucle d'entraînement | Entraîner pour de vrai, premier jalon : XOR qui converge    | -          |
+| 01 | Module, Linear, init                          | Des modèles avec des paramètres à entraîner                 | FINI   |
+| 02 | SGD → momentum → Adam + boucle d'entraînement | Entraîner pour de vrai, premier jalon : XOR qui converge    | En cours       |
 | 03 | MLP sur MNIST                                 | NN de base                                                  | -          |
 | 04 | Embedding + bigramme char-level               | Comprendre du texte                                         | -          |
 | 05 | MLP sur fenêtre de N tokens                   | Fenêtre de contexte                                         | -          |
@@ -42,15 +42,13 @@
 - Le `BasicNDArray` n'a pas d'arithmétique élément par élément : l'autograd tourne sur NumPy (aussi pour des raisons de performances)
 
 
-## 01 · Module, Linear, init 
+## 01 · Module, Linear, init     [OK]
 
 ### Fait
 - [x] Module basic
 - [x] Module `Linear` : `x @ W + b`
 - [x] Init He / Xavier
-### Todo
-
-- [ ] Tester les init
+- [x] Tester les init
 
 ## 02 · Optimiseurs et boucle d'entraînement
 
