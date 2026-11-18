@@ -10,7 +10,7 @@ class Linear(BasicModule):
     def __init__(self,
                  in_features: int,
                  out_features: int,
-                 bias=True,
+                 bias : bool = True,
                  rng : np.random.Generator | None = None,
                  init = Init.he_):
         """
@@ -56,3 +56,34 @@ class Linear(BasicModule):
             return (x @ self.weight.T) + self.bias
         else:
             return x @ self.weight.T
+
+class ReLU(BasicModule):
+    def forward(self, x: BasicTensor) -> BasicTensor:
+        return x.relu()
+
+class Sequential(BasicModule):
+    def __init__(self, *children: BasicModule):
+        super().__init__()
+
+        for count, child in enumerate(children):
+            self.add_child(str(count), child)
+
+    def forward(self, x: BasicTensor) -> BasicTensor:
+        for child in self.children():
+            x = child(x)
+        return x
+
+    def __len__(self) -> int:
+        return len(self._children)
+
+    def __getitem__(self, index: int | slice) -> BasicModule:
+        """
+        Exemple d'utilisation :
+        seq[0] : la première couche
+        seq[-1] : la dernière
+        seq[1:3] : nouveau Sequential avec ces couches (les couches sont partagées / les memes objets)
+        """
+        couches = list(self._children.values())
+        if isinstance(index, slice):
+            return Sequential(*couches[index])
+        return couches[index]
