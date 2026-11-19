@@ -115,7 +115,7 @@ def entrainer_jusqu_a_reussite(model, optim, calcul_loss, prediction,
 
     with no_grad():
         if np.array_equal(prediction(model(ENTREES)), Y_INT):
-            return pas
+            return max_pas
 
     return None
 
