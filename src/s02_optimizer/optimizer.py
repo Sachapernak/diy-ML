@@ -33,4 +33,40 @@ class SGD(Optimizer):
 
     def step(self):
         for param in self.params:
+            if param.grad is None:
+                continue
             param.data -= self.learning_rate * param.grad
+
+class MomentumGradient(Optimizer):
+    def __init__(self, params : Iterable[BasicParameter], learning_rate : float,
+                 momentum : float,
+                 dampening : float = 0):
+        if momentum == 0.0:
+            raise ValueError("Momentum must not be zero. Use SGD instead")
+        super().__init__(params, learning_rate)
+        self.momentum = momentum
+        self.dampening = dampening
+
+        # velocité pour chaque param
+        self.velocities = {}
+
+    def step(self):
+        for param in self.params:
+            if param.grad is None:
+                continue
+
+            grad = param.grad
+
+            v = self.velocities.get(param)
+
+            if v is None:
+                # init de la velocite pour ce param par son gradient
+                v = grad.copy()
+            else:
+                # mise à jour de la velocite
+                v = self.momentum * v + (1 - self.dampening) * grad
+
+            self.velocities[param] = v
+
+            param.data -= self.learning_rate * v
+

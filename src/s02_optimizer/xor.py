@@ -2,7 +2,7 @@ import numpy as np
 
 from src.s00_autograd_and_tensors.autograd import BasicTensor, no_grad
 from src.s01_module_and_init.layers import Sequential, Linear, ReLU
-from src.s02_optimizer.optimizer import SGD
+from src.s02_optimizer.optimizer import SGD, MomentumGradient
 
 # XOR, en NumPy
 x = np.array([[0, 0],
@@ -29,6 +29,21 @@ MAX_PAS = 5000
 AFFICHAGE_TOUS_LES = 200
 
 NB_SEED = 25
+
+
+# ---------------------------------------------------------------------------
+# Optimiseurs à comparer
+# ---------------------------------------------------------------------------
+
+# Un optimiseur se construit à partir des paramètres d'un modèle précis :
+# on stocke donc une fabrique (params -> optimiseur), pas un optimiseur déjà créé.
+OPTIMISEURS = {
+    "SGD":          lambda params: SGD(params, learning_rate=LR),
+    "Momentum 0.9": lambda params: MomentumGradient(params, learning_rate=LR, momentum=0.9),
+    # Avec momentum 0.9, pas effectif vaut environ lr / (1-0.9) = 10*lr.
+    # variante pour comparer avec pas equivalent
+    "Momentum 0.9 (lr/10)": lambda params: MomentumGradient(params, learning_rate=LR / 10, momentum=0.9),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +84,11 @@ def prediction_ce(logits):
     return logits.data.argmax(axis=1)
 
 
+VARIANTES = [
+    ("MSE", mlp_mse, loss_mse, prediction_mse),
+    ("CE",  mlp_ce,  loss_ce,  prediction_ce),
+]
+
 # permet de voir les neurones cachés
 def inspecter(model):
     with no_grad():
@@ -80,12 +100,6 @@ def inspecter(model):
 
     morts = ~actifs.any(axis=0)  # aucun actif
     print(f"    neurones morts partout : {np.flatnonzero(morts)}")
-
-
-# Rejouer une graine qui échoue, en inspectant à intervalles réguliers
-rng = np.random.default_rng(2)
-model = mlp_ce(rng)
-optim = SGD(model.parameters(), learning_rate=LR)
 
 
 # ---------------------------------------------------------------------------
@@ -120,94 +134,90 @@ def entrainer_jusqu_a_reussite(model, optim, calcul_loss, prediction,
     return None
 
 
-def lancer(nom, fabrique_modele, calcul_loss, prediction, seed, verbose=False):
+def lancer(nom, fabrique_modele, calcul_loss, prediction, nom_optim, fabrique_optim,
+           seed, verbose=False, afficher=True):
     """
-    test differents optimizer pour
+    Entraîne un modèle avec un optimiseur, pour une seed
+
+    :param fabrique_optim: params -> optimiseur
+    :return: nb de pas necessaires ou None en cas d'échec
     """
     rng = np.random.default_rng(seed)
     model = fabrique_modele(rng)
-    optim = SGD(model.parameters(), learning_rate=LR)
+    optim = fabrique_optim(model.parameters())
 
     if verbose:
-        print(f"Loss pour : {nom}")
+        print(f"Loss pour : {nom} / {nom_optim}")
 
     pas = entrainer_jusqu_a_reussite(model, optim, calcul_loss, prediction, verbose=verbose)
 
-    with no_grad():
-        predites = prediction(model(ENTREES))
-        loss_finale = float(calcul_loss(model(ENTREES)).data)
+    if afficher:
+        with no_grad():
+            predites = prediction(model(ENTREES))
+            loss_finale = float(calcul_loss(model(ENTREES)).data)
 
-    resultat = f"{pas} pas" if pas is not None else f"échec (>{MAX_PAS})"
-    print(f"  {nom:<8} | seed {seed:>2} | {resultat:<17} | loss : {loss_finale:.3e} | prédit : {predites}")
+        resultat = f"{pas} pas" if pas is not None else f"échec (>{MAX_PAS})"
+        print(f"  {nom:<4} | {nom_optim:<20} | seed {seed:>2} | {resultat:<17} "
+              f"| loss : {loss_finale:.3e} | prédit : {predites}")
     return pas
+
+
+def rejouer_et_inspecter(seed, titre):
+    """Rejoue une seed en CE avec SGD, et inspecte les neurones cachés à quelques étapes."""
+    rng = np.random.default_rng(seed)
+    model = mlp_ce(rng)
+    optim = SGD(model.parameters(), learning_rate=LR)
+    print(f"\n == {titre} (seed {seed}) ==")
+
+    for pas in range(2001):
+        if pas in (0, 1, 10, 100, 500):
+            with no_grad():
+                loss = float(loss_ce(model(ENTREES)).data)
+            print(f"étape {pas} | loss {loss:.4f}")
+            inspecter(model)
+
+        loss = loss_ce(model(ENTREES))
+        optim.zero_grad()
+        loss.backward()
+        optim.step()
 
 
 if __name__ == '__main__':
 
     print(f"Résultat Attendu : {Y_INT}\n")
 
-    # Un run détaillé pour chaque variante
-    lancer("MSE", mlp_mse, loss_mse, prediction_mse, seed=0, verbose=True)
-    print()
-    lancer("CE", mlp_ce, loss_ce, prediction_ce, seed=0, verbose=True)
-    print()
-
-    # Plusieurs graines : une seule initialisation peut avoir de la chance
-    print(f"\nSur {NB_SEED} graines :")
-    for nom, fabrique, calcul_loss, prediction in [
-        ("MSE", mlp_mse, loss_mse, prediction_mse),
-        ("CE", mlp_ce, loss_ce, prediction_ce),
-    ]:
-        resultats = [lancer(nom, fabrique, calcul_loss, prediction, graine) for graine in range(NB_SEED)]
-        reussis = [p for p in resultats if p is not None]
-        mediane = np.median(reussis) if reussis else float("nan")
-        print(f"  -> {nom} : {len(reussis)}/{NB_SEED} réussis, médiane {mediane:.0f} pas\n")
+    # Un run pour chaque variante et chaque optimiseur
+    for nom, fabrique, calcul_loss, prediction in VARIANTES:
+        for nom_optim, fabrique_optim in OPTIMISEURS.items():
+            lancer(nom, fabrique, calcul_loss, prediction, nom_optim, fabrique_optim,
+                   seed=0, verbose=True)
+            print()
 
 
-    # Verif d'un seed qui marche pas
-    rng = np.random.default_rng(2)
-    model = mlp_ce(rng)
-    optim = SGD(model.parameters(), learning_rate=LR)
-    print("\n == Verification d'une seed qui fonctionne pas ==")
+    # Mêmes seed pour tous les optimiseurs -> mêmes init
+    print(f"\nSur {NB_SEED} seed :")
+    resume = []
+    for nom, fabrique, calcul_loss, prediction in VARIANTES:
+        for nom_optim, fabrique_optim in OPTIMISEURS.items():
+            resultats = [lancer(nom, fabrique, calcul_loss, prediction, nom_optim, fabrique_optim,
+                                seed, afficher=False)
+                         for seed in range(NB_SEED)]
+            reussis = [p for p in resultats if p is not None]
+            mediane = np.median(reussis) if reussis else float("nan")
+            resume.append((nom, nom_optim, len(reussis), mediane))
 
-    for pas in range(2001):
-        if pas in (0, 1, 5, 20, 100, 500):
-            with no_grad():
-                loss = float(loss_ce(model(ENTREES)).data)
-            print(f"étape {pas} | loss {loss:.4f}")
-            inspecter(model)
+    print(f"  {'loss':<4} | {'optimiseur':<20} | réussis | médiane")
+    for nom, nom_optim, nb_reussis, mediane in resume:
+        print(f"  {nom:<4} | {nom_optim:<20} | {nb_reussis:>3}/{NB_SEED:<3} | {mediane:.0f} pas")
 
-        loss = loss_ce(model(ENTREES))
-        optim.zero_grad()
-        loss.backward()
-        optim.step()
-
+    rejouer_et_inspecter(2, "Verification d'une seed qui fonctionne pas")
     # On observe :
     # - tous les neurons ont les meme activation (soit s'activent tout le temps, soit jamais)
     # - les relus qui restent active tout le temps introduisent pas de non linearité
     # - le modele devient linéaire. Un xor peut pas être representé par un modèle linéaire
     # - donc ca marche pas
 
-
-    # Verif d'un seed qui marche
-    rng = np.random.default_rng(1)
-    model = mlp_ce(rng)
-    optim = SGD(model.parameters(), learning_rate=LR)
-
-    print("\n == Verification d'une seed qui fonctionne ==")
-
-    for pas in range(2001):
-        if pas in (0, 1, 5, 20, 100, 500):
-            with no_grad():
-                loss = float(loss_ce(model(ENTREES)).data)
-            print(f"étape {pas} | loss {loss:.4f}")
-            inspecter(model)
-
-        loss = loss_ce(model(ENTREES))
-        optim.zero_grad()
-        loss.backward()
-        optim.step()
-
+    rejouer_et_inspecter(1, "Verification d'une seed qui fonctionne")
     # On observe :
     # - Le neuron '0' s'active que quand on a les deux entrée à 1 : c'est un AND
     # - les neurons 1, 6 ne servent a rien car il sont mort
@@ -216,5 +226,3 @@ if __name__ == '__main__':
     # - le neuron 2, 5 : sont des OR
     # - le neuron 7 replique la deuxime entrée
     # -> ce sont probablement 0, 2, 3, 5 qui sont réellement utile ici
-
-
