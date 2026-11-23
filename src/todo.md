@@ -53,10 +53,9 @@
 ## 02 · Optimiseurs et boucle d'entraînement
 
 ### Fait
-- [ ] 
-### Todo
-- [ ] SGD, momentum, Adam
-- [ ] `zero_grad` sur les paramètres
-- [ ] Overfit sur 10 exemples 
-- [ ] XOR 
-- [ ] Vérifier que la loss au premier pas vaut `log(C)`
+- [x] Classe `Optimizer` (ABC) : `step()`, `zero_grad()`
+- [x] SGD, momentum, Adam 
+- [x] XOR en MSE et en CE et comparaison des optimiseurs
+- [x] Verification des neurones cachés pour voir pourquoi ça échoue parfois (On a des ReLU mortes ou toujours actives -> le réseau devient linéaire)
+- [x] AdamW vs Adam
+- [x] Tests de trajectoire vs PyTorch
