@@ -121,6 +121,7 @@ Une sous-classe de `BasicTensor`, avec `requires_grad=True` par défaut. Permet 
 - `MomentumGradient` : une vitesse par paramètre, conservée d'un pas à l'autre. Convention PyTorch : `v = μ · v + (1 − dampening) · g`, avec une copie du gradient au premier pas.
 - `Adam` : Moyenne exponentielle des gradients (m, le momentum) et de leurs carrés (v, RMSprop) + une correction de biais pour le démarrage , et un compteur de pas par paramètre. Weight decay en L2.
 - `AdamW` : Adam avec le weight decay découplé, appliqué directement aux poids plutôt qu'au gradient.
+ - `AdEMAMix` : AdamW avec un second momentum, lent (m₂, β₃ = 0.999 ou 0.9999), ajouté à la mise à jour avec un poids α. Deux schedulers optionnels font monter α de 0 à sa valeur finale et β_3 de β_1 à sa valeur finale. C'est l'optimiseur d'Apertus, le LLM suisse. Sa comparaison avec AdamW se fera sur MNIST ou d'autres réseaux plus tard.
 
 ### XOR
 
@@ -149,6 +150,7 @@ Aucun optimiseur ne gagne vraiment : le problème est trop petit. En inspectant 
 - Pourquoi Adam a besoin d'une correction de biais : m et v démarrent à zéro, et v (avec `β₂ = 0.999`) est bien plus sous-estimé que m. Sans correction, le premier pas serait environ 3 fois trop grand.
 - Pourquoi Adam marche avec `lr = 1e-3` presque partout : le pas vaut environ `lr · m / √v`, de l'ordre de `lr` quelle que soit l'échelle des gradients.
 - Pourquoi AdamW : avec SGD, ajouter `wd · θ` au gradient revient exactement à rétrécir les poids. Avec Adam, ce terme est divisé par `√v`, et chaque paramètre est régularisé différemment selon l'historique de ses gradients.
+- Pourquoi AdEMAMix a deux moments : une seule moyenne exponentielle ne peut pas à la fois suivre les gradients récents et garder du poids sur des gradients vieux de milliers de pas. On a ducoup m_1 pour les gradients récents et m_2 pour les gradients plus ancients.
 
 
 ## Exemple
@@ -241,6 +243,7 @@ Déjà plus de 480 tests, construit de différentes manières :
 - Tests vs PyTorch pour les modules : mêmes paramètres dans le même ordre que `nn.Module`, mêmes sorties et gradients que `nn.Linear`, et la même trajectoire de loss que PyTorch sur 20 pas de SGD (régression et classification).
 - Tests statistiques pour les initialisations : un test de Kolmogorov-Smirnov vérifie que les poids suivent la même loi que ceux de `torch.nn.init`.
 - Tests vs `torch.optim` pour les optimiseurs : les mêmes paramètres que PyTorch après chaque pas, en float64, sur des minibatchs différents, avec une couche qui n'a de gradient qu'un pas sur deux, et sans `zero_grad` (les gradients s'accumulent). Plus un test qui montre qu'Adam + L2 et AdamW divergent, alors qu'avec SGD les deux sont identiques.
+- Tests vs une implémentation de référence pour AdEMAMix (PyTorch n'en a pas) : l'Algorithm 1 du papier en NumPy, avec le gradient analytique de la fonction de Rosenbrock. La même trajectoire avec et sans schedulers, AdamW retrouvé quand α = 0, et une demi-vie de m₂ qui croît linéairement.
 
 Disclaimer : comme les tests ne sont pas forcément la partie la plus intéressante à écrire dans le projet, j'ai pris
 la décision de déléguer leur écriture à des LLM (Claude pour l'instant). 
@@ -257,7 +260,7 @@ src/
     init.py              # Initialisations (He, Xavier, LeCun...)
     layers.py            # Modules spécifiques (ex : Linear...)
   s02_optimizer/
-    optimizer.py         # Optimizer, SGD, MomentumGradient, Adam, AdamW
+    optimizer.py         # Optimizer, SGD, MomentumGradient, Adam, AdamW, AdEMAMix
     xor.py               # XOR : comparaison des optimiseurs, inspection des neurones
 tests/
   s00_autograd_and_tensors/
@@ -280,6 +283,9 @@ tests/
 - [Dive into Deep Learning](https://d2l.ai/)
 - [On weight initialization in deep neural networks](https://arxiv.org/abs/1704.08863) de Siddharth Krishna Kumar pour l'init
 - [La documentation PyTorch](https://docs.pytorch.org/docs/2.15/pytorch-api.html)
+- [Adam: A Method for Stochastic Optimization](https://arxiv.org/abs/1412.6980) de Diederik P. Kingma et Jimmy Ba
+- [Decoupled Weight Decay Regularization](https://arxiv.org/abs/1711.05101) de Ilya Loshchilov et Frank Hutter
+- [The AdEMAMix Optimizer: Better, Faster, Older](https://arxiv.org/abs/2409.03137v2) de Matteo Pagliardini, Pierre Ablin et David Grangier
 - Diverses recherches internet.
 - Wikipedia. Quand c'est compréhensible.
 - Claude quand vraiment je galère.

@@ -2,7 +2,7 @@ import numpy as np
 
 from src.s00_autograd_and_tensors.autograd import BasicTensor, no_grad
 from src.s01_module_and_init.layers import Sequential, Linear, ReLU
-from src.s02_optimizer.optimizer import SGD, MomentumGradient, Adam, AdamW
+from src.s02_optimizer.optimizer import SGD, MomentumGradient, Adam, AdamW, AdEMAMix
 
 # XOR, en NumPy
 x = np.array([[0, 0],
@@ -49,6 +49,8 @@ OPTIMISEURS = {
     # il faut beaucoup de pas. Ici on test aussi avec 1e-2 pour que ce soit plus raisonnable
     "Adam (lr 1e-2)": lambda params: Adam(params, learning_rate=1e-2, beta1=0.9, beta2=0.999, eps=1e-8),
     "AdamW (lr 1e-2)": lambda params: AdamW(params, learning_rate=1e-2, beta1=0.9, beta2=0.999, eps=1e-8, decay=1e-2),
+    # Variante d'Adam
+    "AdEMAMix": lambda params: AdEMAMix(params),
 }
 
 

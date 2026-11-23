@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Iterable, TYPE_CHECKING
+import numpy as np
 
 if TYPE_CHECKING:
     # Import pour le typage
@@ -191,8 +192,104 @@ class AdamW(Adam):
 
             param.data -= self.learning_rate * (m_corrige / (v_corrige ** 0.5 + self.eps))
 
+class AdEMAMix(AdamW):
+    """
+        Variante d'AdamW avec deux moving average a la place d'un seul
+    """
+    def __init__(self, params : Iterable[BasicParameter],
+                 learning_rate : float = 1e-3,
+                 beta1 : float = 0.9,
+                 beta2 : float= 0.999,
+                 eps : float= 1e-8,
+                 decay : float = 1e-2,
+                 beta3: float = 0.999,
+                 alpha: float = 5.0,
+                 t_alpha: int | None = None,
+                 t_beta: int | None = None,
+                 beta_start: float | None =  None,):
+        super().__init__(params, learning_rate, beta1, beta2, eps, decay)
+        self.beta3 = beta3
+        self.slow_moment = {}
+        self.alpha = alpha
+        self.t_alpha = t_alpha
+        self.t_beta = t_beta
+
+        if beta_start is None:
+           self.beta_start = self.beta1
+        else:
+           self.beta_start = beta_start
+
+    def step(self):
+        for param in self.params:
+            if param.grad is None:
+                continue
+
+            grad = param.grad.copy()
+
+            # recup de valeurs pour le param
+            v = self.velocities.get(param, 0)
+            m = self.moments.get(param, 0)
+            m2 = self.slow_moment.get(param, 0)
+
+            t = self.t.get(param, 1)
+
+            if self.t_beta is not None:
+                beta = self._fbeta3(t, self.beta3, self.beta_start, self.t_beta)
+            else:
+                beta = self.beta3
+
+            if self.t_alpha is not None:
+                alpha = self._falpha(t, self.alpha, self.t_alpha)
+            else:
+                alpha = self.alpha
 
 
+            # weight decay decouplé du gradient
+            param.data -= self.learning_rate * self.decay * param.data
+
+            # calcul de m et v
+            m = self.beta1 * m + (1 - self.beta1) * grad
+            m2 = beta * m2 + (1 - beta) * grad
+            v = self.beta2 * v + (1 - self.beta2) * (grad ** 2)
+
+            # correction du biais
+            m_corrige = m / ( 1 - (self.beta1 ** t))
+            v_corrige = v / (1 - (self.beta2 ** t))
+
+            # mise à jour des valeurs pour ce param
+            self.moments[param] = m
+            self.slow_moment[param] = m2
+            self.velocities[param] = v
+            self.t[param] = t + 1
+
+            param.data -= self.learning_rate * ((m_corrige + alpha * m2) / (v_corrige ** 0.5 + self.eps))
+
+    def _falpha(self, t, alpha, t_alpha):
+        """
+         Scheduler de alpha : montée linéaire de 0 à alpha sur t_alpha pas puis constant.
+
+        :param t: nombre d'etape
+        :param alpha: la valeur finale d'alpha
+        :param t_alpha: le nombre d'etape de pour avoir alpha a sa valeur finale
+        :return: la valeur de alpha pour l'etape t
+        """
+        return min((t*alpha) / t_alpha, alpha)
+
+    def _fbeta3(self, t, beta3, beta_start, t_beta):
+        """
+        Scheduler de beta3 : monte de beta_start à beta3 sur t_beta step, puis constant
+
+        :param t: nombre de pas courrant
+        :param beta3: la valeur finale de beta 3
+        :param beta_start: valeur de départ de beta3
+        :param t_beta: nombre d'etape pour avoir beta3 a sa valeur finale
+        :return: la valeur de beta3 pour l'etape t
+        """
+
+        return min(np.exp(np.log (beta_start) * np.log(beta3)
+                          / ((1 - (t / t_beta)) * np.log(beta3)
+                            + (t/t_beta) * np.log(beta_start))
+                          ), beta3)
 
 
 

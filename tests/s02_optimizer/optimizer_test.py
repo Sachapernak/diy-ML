@@ -4,9 +4,8 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from src.s00_autograd_and_tensors.autograd import BasicTensor, default_dtype
-from src.s01_module_and_init.layers import Sequential, Linear, ReLU
-from src.s02_optimizer.optimizer import SGD, MomentumGradient, Adam, AdamW
-
+from src.s01_module_and_init.layers import Sequential, Linear, ReLU, BasicParameter
+from src.s02_optimizer.optimizer import SGD, MomentumGradient, Adam, AdamW, AdEMAMix
 NB_PAS = 30
 
 
@@ -260,3 +259,93 @@ def test_avec_sgd_l2_et_decay_decouple_sont_identiques():
 
     for p_a, p_b in zip(a.parameters(), b.parameters()):
         assert torch.allclose(p_a, p_b, rtol=1e-10, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# 5. AdEMAMix
+# ---------------------------------------------------------------------------
+
+X0_ROSENBROCK = np.array([-3.0, 5.0])
+HYPER_ADEMAMIX = dict(lr=1e-2, beta1=0.9, beta2=0.999, beta3=0.999, alpha=8.0, eps=1e-8, wd=0.01)
+
+
+def rosenbrock(theta):
+    x1, x2 = theta[0], theta[1]
+    return (1 - x1) ** 2 + 100 * (x2 - x1 ** 2) ** 2
+
+
+def ademamix_reference(lr, beta1, beta2, beta3, alpha, eps, wd, t_alpha=None, t_beta=None, nb_pas=300):
+    """L'Algorithm 1 du papier avec le gradient analytique de Rosenbrock."""
+    x = X0_ROSENBROCK.copy()
+    m1, m2, v = np.zeros(2), np.zeros(2), np.zeros(2)
+    trajectoire = []
+    for t in range(1, nb_pas + 1):
+        x1, x2 = x
+        g = np.array([-2 * (1 - x1) - 400 * x1 * (x2 - x1 ** 2), 200 * (x2 - x1 ** 2)])
+
+        a = alpha if t_alpha is None else min(t * alpha / t_alpha, alpha)
+        b3 = beta3
+        if t_beta is not None:
+            ln_s, ln_3 = np.log(beta1), np.log(beta3)
+            b3 = min(np.exp(ln_s * ln_3 / ((1 - t / t_beta) * ln_3 + (t / t_beta) * ln_s)), beta3)
+
+        m1 = beta1 * m1 + (1 - beta1) * g
+        m2 = b3 * m2 + (1 - b3) * g  # pas de correction de biais sur m2
+        v = beta2 * v + (1 - beta2) * g ** 2
+        m1_hat, v_hat = m1 / (1 - beta1 ** t), v / (1 - beta2 ** t)
+
+        x = x - lr * ((m1_hat + a * m2) / (np.sqrt(v_hat) + eps) + wd * x)
+        trajectoire.append(x.copy())
+    return np.array(trajectoire)
+
+
+def trajectoire_rosenbrock(fabrique, nb_pas=300):
+    with default_dtype(np.float64):
+        theta = BasicParameter(X0_ROSENBROCK.copy())
+        opt = fabrique([theta])
+        trajectoire = []
+        for _ in range(nb_pas):
+            opt.zero_grad()
+            rosenbrock(theta).backward()
+            opt.step()
+            trajectoire.append(theta.data.copy())
+    return np.array(trajectoire)
+
+
+def notre_ademamix(lr, beta1, beta2, beta3, alpha, eps, wd, t_alpha=None, t_beta=None):
+    return lambda p: AdEMAMix(p, learning_rate=lr, beta1=beta1, beta2=beta2, eps=eps, decay=wd,
+                              beta3=beta3, alpha=alpha, t_alpha=t_alpha, t_beta=t_beta)
+
+
+@pytest.mark.parametrize("schedulers", [
+    {},  # sans scheduler
+    {"t_alpha": 200, "t_beta": 200},  # montee sur 200 pas, puis plateau jusqu'a 300
+])
+def test_ademamix_meme_trajectoire_que_la_reference(schedulers):
+    hyper = dict(HYPER_ADEMAMIX, **schedulers)
+    nous = trajectoire_rosenbrock(notre_ademamix(**hyper))
+    reference = ademamix_reference(**hyper)
+    np.testing.assert_allclose(nous, reference, rtol=1e-7, atol=1e-10)
+
+
+def test_ademamix_alpha_nul_redonne_adamw():
+    """m2 ne vaut plus rien -> on revient sur AdamW."""
+    h = HYPER_ADEMAMIX
+    nous = trajectoire_rosenbrock(notre_ademamix(**dict(h, alpha=0.0)))
+    adamw = trajectoire_rosenbrock(lambda p: AdamW(p, h["lr"], h["beta1"], h["beta2"], h["eps"], h["wd"]))
+    np.testing.assert_allclose(nous, adamw, rtol=1e-12, atol=1e-14)
+
+
+def test_ademamix_demi_vie_de_m2_croit_lineairement():
+    """
+    Le scheduler de beta3 fait croitre lineairement la demi-vie de m2, ln(0.5) / ln(beta3(t))
+    """
+    with default_dtype(np.float64):
+        opt = AdEMAMix([BasicParameter(np.zeros(2))])
+    T = 1000
+    betas = np.array([opt._fbeta3(t, 0.9999, 0.9, T) for t in np.linspace(0, T, 11)])
+    demi_vies = np.log(0.5) / np.log(betas)
+
+    assert np.isclose(betas[0], 0.9) and np.isclose(betas[-1], 0.9999)
+    np.testing.assert_allclose(demi_vies, np.linspace(demi_vies[0], demi_vies[-1], 11), rtol=1e-6)
+    assert betas[1] > 0.998
