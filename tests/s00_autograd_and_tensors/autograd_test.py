@@ -1010,8 +1010,9 @@ def test_exp_contre_pytorch():
 
 def test_exp_deborde_sur_grands_logits():
     """exp(800) = inf. -> log-sum-exp trick"""
-    a = BasicTensor([800.0])
-    assert np.isinf(a.exp().data[0])
+    with pytest.warns(RuntimeWarning, match="overflow"):
+        a = BasicTensor([800.0])
+        assert np.isinf(a.exp().data[0])
 
 
 # ---------------------------------------------------------------------------
@@ -1080,10 +1081,11 @@ def test_gradcheck_softmax_naif():
 
 def test_softmax_naif_deborde():
     """exp deborde et softmax donne des NaN."""
-    logits = BasicTensor([[800.0, 1.0, 2.0]])
-    e = logits.exp()
-    probas = e / e.sum(axis=1, keepdims=True)
-    assert np.isnan(probas.data).any() or np.isinf(probas.data).any()
+    with pytest.warns(RuntimeWarning):
+        logits = BasicTensor([[800.0, 1.0, 2.0]])
+        e = logits.exp()
+        probas = e / e.sum(axis=1, keepdims=True)
+        assert np.isnan(probas.data).any() or np.isinf(probas.data).any()
 
 # ---------------------------------------------------------------------------
 # 22. naive_softmax

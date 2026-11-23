@@ -613,10 +613,25 @@ class BasicTensor:
         return self.log().mul(target).sum(axis=-1).neg().mean()
 
     def cross_entropy(self, target):
+        if not isinstance(target, BasicTensor):
+            target = BasicTensor(target)
+
+        if self.shape != target.shape:
+            raise ValueError(f"target shape {target.shape} doesn't match logits shape {self.shape}. "
+                             f"Target must be one-hot with the same shape as the logits.")
+
         # H(P,Q) = - Sum ( log_softmax( Q(x) ) * P(x) )
         # P(x) : vrai proba
         # Q(x) : logits
         return self.log_softmax().mul(target).sum(axis=-1).neg().mean()
+
+    def mse_loss(self, target):
+        if not isinstance(target, BasicTensor):
+            target = BasicTensor(target)
+
+        if self.shape != target.shape:
+            raise ValueError(f"target shape: {target.shape} dont match this logits shape : {self.shape}")
+        return self.sub(target).pow(2).mean()
 
     # ================ OP de forme
     @property

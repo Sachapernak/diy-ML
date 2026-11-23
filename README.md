@@ -24,8 +24,8 @@ standard quand le but devient d'aller plus loin plutôt que de passer son temps 
 |----|--------------------------------------------|----------|
 | 00 | Tensor + autograd                          | Fini     |
 | 01 | Module, Linear, initialisation             | Fini |
-| 02 | Optimiseurs et boucle d'entraînement       | En cours  |
-| 03 | MLP sur MNIST ?                            | À faire  |
+| 02 | Optimiseurs et boucle d'entraînement       | Fini  |
+| 03 | MLP sur MNIST ?                            | En cours  |
 | 04 | Embedding                                  | À faire  |
 | 05 | MLP sur fenêtre de N tokens                | À faire  |
 | 06 | CNN basique                                | À faire  |
@@ -97,6 +97,7 @@ Une sous-classe de `BasicTensor`, avec `requires_grad=True` par défaut. Permet 
 
 - `Linear` : poids rangés en `(out, in)` comme PyTorch, forward `x @ W.T + b`, biais optionnel, et initialisation He par défaut (modifiable à la construction).
 - Chaque couche initialise ses propres paramètres dans `reset_parameters()`.
+- `ReLU`, et `Sequential` qui enchaîne des modules, avec `len()`, l'indexation et le slicing (`model[0]`, `model[:2]`).
 
 ### Les points clés :
 
@@ -106,6 +107,50 @@ Une sous-classe de `BasicTensor`, avec `requires_grad=True` par défaut. Permet 
 - Pourquoi on n'initialise pas les poids à zéro : tous les neurones d'une couche resteraient identiques pour toujours (cf. problème de symétrie).
 - Pourquoi c'est la variance qui compte et pas la distribution, et d'où viennent les facteurs : `1/n` pour garder la variance stable d'une couche à l'autre, `2/n` pour compenser ReLU qui en coupe la moitié.
 - Pourquoi PyTorch range les poids en `(out, in)` : c'est la convention mathématique `y = Wx`, la transposée ne coûte rien et enfin le partage de poids entre l'embedding et la couche de sortie d'un GPT devient direct.
+
+## Étape 02 : optimiseurs et boucle d'entraînement
+
+### `Optimizer`
+
+- Une classe abstraite qui reçoit `model.parameters()` et un learning rate. `zero_grad()` est commun, `step()` est propre à chaque optimiseur.
+- La mise à jour modifie `param.data` directement, en NumPy, hors du graphe. Les paramètres sans gradient sont ignorés.
+
+### Les optimiseurs
+
+- `SGD` : `θ -= lr · g`.
+- `MomentumGradient` : une vitesse par paramètre, conservée d'un pas à l'autre. Convention PyTorch : `v = μ · v + (1 − dampening) · g`, avec une copie du gradient au premier pas.
+- `Adam` : Moyenne exponentielle des gradients (m, le momentum) et de leurs carrés (v, RMSprop) + une correction de biais pour le démarrage , et un compteur de pas par paramètre. Weight decay en L2.
+- `AdamW` : Adam avec le weight decay découplé, appliqué directement aux poids plutôt qu'au gradient.
+ - `AdEMAMix` : AdamW avec un second momentum, lent (m₂, β₃ = 0.999 ou 0.9999), ajouté à la mise à jour avec un poids α. Deux schedulers optionnels font monter α de 0 à sa valeur finale et β_3 de β_1 à sa valeur finale. C'est l'optimiseur d'Apertus, le LLM suisse. Sa comparaison avec AdamW se fera sur MNIST ou d'autres réseaux plus tard.
+
+### XOR
+
+Le premier réseau entraîné de bout en bout avec le moteur : un MLP `2 → 8 → 1` en MSE, ou `2 → 8 → 2` en cross-entropy, entraîné jusqu'à ce que les 4 points soient bien classés.
+
+Sur 25 graines (les mêmes initialisations pour tous les optimiseurs), avec max 1000 pas :
+
+| Loss | Optimiseur           | Réussis | Médiane  |
+|------|----------------------|---------|----------|
+| MSE  | SGD (lr 0.1)         | 25/25   | 16 pas   |
+| MSE  | Momentum 0.9         | 19/25   | 13 pas   |
+| MSE  | Adam (lr 1e-3)       | 23/25   | 374 pas  |
+| MSE  | Adam (lr 1e-2)       | 24/25   | 44 pas   |
+| CE   | SGD (lr 0.1)         | 23/25   | 32 pas   |
+| CE   | Momentum 0.9         | 22/25   | 10 pas   |
+| CE   | Adam (lr 1e-3)       | 23/25   | 251 pas  |
+| CE   | Adam (lr 1e-2)       | 23/25   | 30 pas   |
+
+Aucun optimiseur ne gagne vraiment : le problème est trop petit. En inspectant les neurones cachés, on voit que les échecs viennent de ReLU qui restent toutes actives (ou toutes mortes) sur les 4 points, le réseau devient linéaire, et un modèle linéaire ne peut pas représenter un XOR. Sur une seed qui réussit, on retrouve au contraire des neurones qui font un AND, des OR, ou ne s'activent que sur un seul point.
+
+### Les points clés :
+
+- Pourquoi l'optimiseur met à jour `.data` hors du graphe : la mise à jour ne doit pas être dérivée.
+- Pourquoi SGD et la descente de gradient sont le même code : la seule différence est dans les données (un minibatch ou tout le dataset).
+- Pourquoi le momentum à lr égal fait des pas environ 10 fois plus grands : avec `μ = 0.9`, la vitesse est une somme de gradients dont les poids totalisent `1 / (1 − μ) = 10`.
+- Pourquoi Adam a besoin d'une correction de biais : m et v démarrent à zéro, et v (avec `β₂ = 0.999`) est bien plus sous-estimé que m. Sans correction, le premier pas serait environ 3 fois trop grand.
+- Pourquoi Adam marche avec `lr = 1e-3` presque partout : le pas vaut environ `lr · m / √v`, de l'ordre de `lr` quelle que soit l'échelle des gradients.
+- Pourquoi AdamW : avec SGD, ajouter `wd · θ` au gradient revient exactement à rétrécir les poids. Avec Adam, ce terme est divisé par `√v`, et chaque paramètre est régularisé différemment selon l'historique de ses gradients.
+- Pourquoi AdEMAMix a deux moments : une seule moyenne exponentielle ne peut pas à la fois suivre les gradients récents et garder du poids sur des gradients vieux de milliers de pas. On a ducoup m_1 pour les gradients récents et m_2 pour les gradients plus ancients.
 
 
 ## Exemple
@@ -150,6 +195,28 @@ model(x).mean().backward()
 print(model.fc1.weight.grad.shape)     # (8, 4)
 ```
 
+Et l'entraînement, avec l'étape 02 :
+
+```python
+import numpy as np
+from src.s00_autograd_and_tensors.autograd import BasicTensor
+from src.s01_module_and_init.layers import Sequential, Linear, ReLU
+from src.s02_optimizer.optimizer import AdamW
+
+rng = np.random.default_rng(0)
+model = Sequential(Linear(4, 16, rng=rng), ReLU(), Linear(16, 3, rng=rng))
+optim = AdamW(model.parameters(), learning_rate=1e-2)
+
+x = BasicTensor(rng.standard_normal((32, 4)))
+cibles = BasicTensor(np.eye(3)[rng.integers(0, 3, 32)])   # one-hot
+
+for pas in range(100):
+    loss = model(x).cross_entropy(cibles)
+    optim.zero_grad()
+    loss.backward()
+    optim.step()
+```
+
 ## Installation
 
 Le projet utilise [uv](https://docs.astral.sh/uv/) et Python 3.14 ou plus récent.
@@ -167,7 +234,7 @@ comme référence dans les tests. Il sera utilisé pour entrainer les modèles.
 uv run pytest
 ```
 
-Déjà plus de 400 tests, construit de différentes manières :
+Déjà plus de 480 tests, construit de différentes manières :
 
 - Tests vs NumPy pour le `BasicNDArray` : test si avec les mêmes données on a les mêmes résultats, y compris après transpose et broadcast.
 - Tests vs PyTorch pour l'autograd : mêmes chose qu'au dessus.
@@ -175,6 +242,8 @@ Déjà plus de 400 tests, construit de différentes manières :
 - Tests qui montrent les problèmes comme le softmax naïf qui renvoie `nan` sur de grands logits, alors que PyTorch marche sur la même entrée.
 - Tests vs PyTorch pour les modules : mêmes paramètres dans le même ordre que `nn.Module`, mêmes sorties et gradients que `nn.Linear`, et la même trajectoire de loss que PyTorch sur 20 pas de SGD (régression et classification).
 - Tests statistiques pour les initialisations : un test de Kolmogorov-Smirnov vérifie que les poids suivent la même loi que ceux de `torch.nn.init`.
+- Tests vs `torch.optim` pour les optimiseurs : les mêmes paramètres que PyTorch après chaque pas, en float64, sur des minibatchs différents, avec une couche qui n'a de gradient qu'un pas sur deux, et sans `zero_grad` (les gradients s'accumulent). Plus un test qui montre qu'Adam + L2 et AdamW divergent, alors qu'avec SGD les deux sont identiques.
+- Tests vs une implémentation de référence pour AdEMAMix (PyTorch n'en a pas) : l'Algorithm 1 du papier en NumPy, avec le gradient analytique de la fonction de Rosenbrock. La même trajectoire avec et sans schedulers, AdamW retrouvé quand α = 0, et une demi-vie de m₂ qui croît linéairement.
 
 Disclaimer : comme les tests ne sont pas forcément la partie la plus intéressante à écrire dans le projet, j'ai pris
 la décision de déléguer leur écriture à des LLM (Claude pour l'instant). 
@@ -190,6 +259,9 @@ src/
     module.py            # BasicModule, BasicParameter
     init.py              # Initialisations (He, Xavier, LeCun...)
     layers.py            # Modules spécifiques (ex : Linear...)
+  s02_optimizer/
+    optimizer.py         # Optimizer, SGD, MomentumGradient, Adam, AdamW, AdEMAMix
+    xor.py               # XOR : comparaison des optimiseurs, inspection des neurones
 tests/
   s00_autograd_and_tensors/
     basic_nd_array_test.py
@@ -198,6 +270,8 @@ tests/
   s01_module_and_init/
     init_test.py
     module_test.py
+  s02_optimizer/
+    optimizer_test.py
 ```
 
 
@@ -208,6 +282,10 @@ tests/
 - [CS231n](https://cs231n.github.io/) de Stanford
 - [Dive into Deep Learning](https://d2l.ai/)
 - [On weight initialization in deep neural networks](https://arxiv.org/abs/1704.08863) de Siddharth Krishna Kumar pour l'init
+- [La documentation PyTorch](https://docs.pytorch.org/docs/2.15/pytorch-api.html)
+- [Adam: A Method for Stochastic Optimization](https://arxiv.org/abs/1412.6980) de Diederik P. Kingma et Jimmy Ba
+- [Decoupled Weight Decay Regularization](https://arxiv.org/abs/1711.05101) de Ilya Loshchilov et Frank Hutter
+- [The AdEMAMix Optimizer: Better, Faster, Older](https://arxiv.org/abs/2409.03137v2) de Matteo Pagliardini, Pierre Ablin et David Grangier
 - Diverses recherches internet.
 - Wikipedia. Quand c'est compréhensible.
 - Claude quand vraiment je galère.
