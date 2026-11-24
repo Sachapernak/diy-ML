@@ -613,12 +613,48 @@ class BasicTensor:
         return self.log().mul(target).sum(axis=-1).neg().mean()
 
     def cross_entropy(self, target):
+        """
+        Cross entropy moyenne entre logits et cible.
+
+        Accepte deux format :
+          - Indice de la classe, entier de shape logits.shape[:-1]
+            ex : [1, 2], equivalent à [[0, 1, 0] , [0, 0, 1]] en one-hot
+          - deja en one-hot ou des probabilités : floats de la même shape que les logits.
+
+        """
+        # recuperation de l'array numpy
+        cible = target.data if isinstance(target, BasicTensor) else np.asarray(target)
+
+        # Cas 1 : indices de classe -> on a un des int -> On prend direct la log-proba de la bonne classe
+        if np.issubdtype(cible.dtype, np.integer):
+            # check si l'indice est pas negatif
+            if cible.shape != self.shape[:-1]:
+                raise ValueError(f"indices de shape {cible.shape}, attendu {self.shape[:-1]} "
+                                 f"(la shape des logits {self.shape} sans le dernier axe)")
+
+            nb_classes = self.shape[-1]
+
+            # check si ca rentre dans les bonr
+            if cible.size and (cible.min() < 0 or cible.max() >= nb_classes):
+                raise IndexError(f"indices de classe hors de [0, {nb_classes - 1}]")
+
+            # calcul les log_probas de chaque logits et reshape en tableau 2D
+            log_probas = self.log_softmax().reshape(-1, nb_classes)
+            # reshape en tableau 2d
+            indices = cible.reshape(-1)
+
+            # calcul la log proba de la bonne classe de chaque truc
+            return log_probas[np.arange(len(indices)), indices].neg().mean()
+
+
+        # Cas 2 avec dejà des one-hot ou probas, de même shape que les logits
         if not isinstance(target, BasicTensor):
             target = BasicTensor(target)
 
         if self.shape != target.shape:
-            raise ValueError(f"target shape {target.shape} doesn't match logits shape {self.shape}. "
-                             f"Target must be one-hot with the same shape as the logits.")
+            raise ValueError(f"cible de shape {target.shape}, logits de shape {self.shape}. La cible doit "
+                             f"être soit un one-hot de la même shape, soit des indices entiers de shape "
+                             f"{self.shape[:-1]}.")
 
         # H(P,Q) = - Sum ( log_softmax( Q(x) ) * P(x) )
         # P(x) : vrai proba
@@ -664,7 +700,8 @@ class BasicTensor:
 
     def flatten(self, start_axis=1):
         """
-        Transforme le tensor en un tableau 1D
+        Aplatit toutes les dimensions à partir de start_axis.
+        Par defaut, garde l'axe du batch et applatit vers un tableau 2D : (B, C, H, W) -> (B, C.H.W)
         """
         # (B, C, H, W) -> (B, C*H*W) par défaut
         return self.reshape(*self.data.shape[:start_axis], -1)
@@ -734,6 +771,13 @@ class BasicTensor:
     # =============
     # Autres OP
     # =============
+
+    def argmax(self, axis=-1):
+        return self.data.argmax(axis=axis).astype(dtype=self.data.dtype)
+
+    def item(self):
+        return self.data.item()
+
     def __getitem__(self, index):
         # si on indexe avec des tensor, on récupère leurs données (en entiers)
         idx = index
@@ -861,3 +905,6 @@ class BasicTensor:
             self.grad = contribution.copy()
         else:
             self.grad += contribution
+
+    def __len__(self) -> int:
+        return len(self.data)

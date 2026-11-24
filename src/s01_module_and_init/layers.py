@@ -52,6 +52,8 @@ class Linear(BasicModule):
 
 
     def forward(self, x: BasicTensor) -> BasicTensor:
+        self._check_is_correct_type(x)
+
         if self.bias is not None:
             return (x @ self.weight.T) + self.bias
         else:
@@ -59,6 +61,7 @@ class Linear(BasicModule):
 
 class ReLU(BasicModule):
     def forward(self, x: BasicTensor) -> BasicTensor:
+        self._check_is_correct_type(x)
         return x.relu()
 
 class Sequential(BasicModule):
@@ -87,3 +90,32 @@ class Sequential(BasicModule):
         if isinstance(index, slice):
             return Sequential(*couches[index])
         return couches[index]
+
+class Flatten(BasicModule):
+    """
+        Permet d'aplatir un batch d'image vers un tableau 2D (B, d1, d2...) -> B(B, d1 * d2 * ...)
+    """
+    def forward(self, x: BasicTensor) -> BasicTensor:
+        self._check_is_correct_type(x)
+
+        return x.flatten()
+
+
+
+
+class Normalize(BasicModule):
+    """
+        Normalisation pour avoir la moyenne à zero et la variance à 1
+
+        Généralement moyenne et ecart_type viennent des données d'entrainement.
+    """
+    def __init__(self, moyenne: float, ecart_type: float):
+        super().__init__()
+        if ecart_type <= 0:
+            raise ValueError(f"ecart_type {ecart_type} must be strictly above 0.")
+        self.moyenne = float(moyenne)
+        self.ecart_type = float(ecart_type)
+
+    def forward(self, x: BasicTensor) -> BasicTensor:
+        self._check_is_correct_type(x)
+        return (x - self.moyenne) / self.ecart_type

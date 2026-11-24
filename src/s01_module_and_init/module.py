@@ -188,3 +188,7 @@ class BasicModule:
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
+
+    def _check_is_correct_type(self, x):
+        if not isinstance(x, BasicTensor):
+            raise TypeError("input must be a BasicTensor")
