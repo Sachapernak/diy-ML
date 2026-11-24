@@ -4,8 +4,8 @@
 |----|-----------------------------------------------|-------------------------------------------------------------|------------|
 | 00 | Tensor + autograd                             | Les briques de calcul et le backward                        | FINI       |
 | 01 | Module, Linear, init                          | Des modèles avec des paramètres à entraîner                 | FINI   |
-| 02 | SGD → momentum → Adam + boucle d'entraînement | Entraîner pour de vrai, premier jalon : XOR qui converge    | En cours       |
-| 03 | MLP sur MNIST                                 | NN de base                                                  | -          |
+| 02 | SGD → momentum → Adam + boucle d'entraînement | Entraîner pour de vrai, premier jalon : XOR qui converge    | FINI       |
+| 03 | MLP sur MNIST                                 | NN de base                                                  | En cours          |
 | 04 | Embedding + bigramme char-level               | Comprendre du texte                                         | -          |
 | 05 | MLP sur fenêtre de N tokens                   | Fenêtre de contexte                                         | -          |
 | 06 | CNN basique                                   | Autre type de NN (branche latérale, pas requis pour le GPT) | -          |
