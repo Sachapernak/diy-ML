@@ -4,8 +4,8 @@
 |----|-----------------------------------------------|-------------------------------------------------------------|------------|
 | 00 | Tensor + autograd                             | Les briques de calcul et le backward                        | FINI       |
 | 01 | Module, Linear, init                          | Des modèles avec des paramètres à entraîner                 | FINI   |
-| 02 | SGD → momentum → Adam + boucle d'entraînement | Entraîner pour de vrai, premier jalon : XOR qui converge    | En cours       |
-| 03 | MLP sur MNIST                                 | NN de base                                                  | -          |
+| 02 | SGD → momentum → Adam + boucle d'entraînement | Entraîner pour de vrai, premier jalon : XOR qui converge    | FINI       |
+| 03 | MLP sur MNIST                                 | NN de base                                                  | FINI       |
 | 04 | Embedding + bigramme char-level               | Comprendre du texte                                         | -          |
 | 05 | MLP sur fenêtre de N tokens                   | Fenêtre de contexte                                         | -          |
 | 06 | CNN basique                                   | Autre type de NN (branche latérale, pas requis pour le GPT) | -          |
@@ -50,7 +50,7 @@
 - [x] Init He / Xavier
 - [x] Tester les init
 
-## 02 · Optimiseurs et boucle d'entraînement
+## 02 · Optimiseurs et boucle d'entraînement [0K]
 
 ### Fait
 - [x] Classe `Optimizer` (ABC) : `step()`, `zero_grad()`
@@ -59,3 +59,31 @@
 - [x] Verification des neurones cachés pour voir pourquoi ça échoue parfois (On a des ReLU mortes ou toujours actives -> le réseau devient linéaire)
 - [x] AdamW vs Adam
 - [x] Tests de trajectoire vs PyTorch
+
+## 03 · MLP sur MNIST   [OK]
+
+### Fait
+- [x] Chargement de MNIST 
+- [x] `split` train / validation, `minibatch`, `BasicDataLoader`
+- [x] `Flatten` et `Normalize` dans le modèle 
+- [x] `cross_entropy` avec des indices de classe
+- [x] Loss initiale vérifiée (~ log(10), LeCun sur la dernière couche)
+- [x] Boucles d'entraînement et d'évaluation 
+- [x] Comparaison 5 modèles * 4 optimiseurs sur 5 graines
+- [x] Évaluation unique sur le test : 97,7 % (MLP 256, AdamW)
+- [x] Démo interactive : dessiner un chiffre, prédiction en temps réel
+- [x] Tests du chargement et du pipeline vs PyTorch
+
+### Plus tard
+- [ ] Scheduler du learning rate (cosinus, WSD) : avant le GPT
+- [ ] Sauvegarde et chargement des poids (dans `BasicModule`, avec les buffers)
+- [ ] Garder les poids de la meilleure époque, et tester ceux-là
+- [ ] K-fold cross validation, ou plusieurs graines de découpage
+- [ ] Un lr réglé par optimiseur avant de les comparer
+- [ ] (optionnel) Augmentation de données, Dropout
+- [ ] (optionnel) Afficher les images mal classées
+
+### Limites connues
+- Le MLP plafonne vers 98 % : il perd la structure 2D de l'image (→ CNN, étape 06).
+- La démo se trompe sur les écritures absentes de MNIST (9 et 1 "européen" vs ), avec une forte confiance.
+- Le test a été fait sur les poids de la dernière époque, pas de la meilleure.

@@ -25,7 +25,7 @@ standard quand le but devient d'aller plus loin plutôt que de passer son temps 
 | 00 | Tensor + autograd                          | Fini     |
 | 01 | Module, Linear, initialisation             | Fini |
 | 02 | Optimiseurs et boucle d'entraînement       | Fini  |
-| 03 | MLP sur MNIST ?                            | En cours  |
+| 03 | MLP sur MNIST                              | Fini     |
 | 04 | Embedding                                  | À faire  |
 | 05 | MLP sur fenêtre de N tokens                | À faire  |
 | 06 | CNN basique                                | À faire  |
@@ -119,9 +119,9 @@ Une sous-classe de `BasicTensor`, avec `requires_grad=True` par défaut. Permet 
 
 - `SGD` : `θ -= lr · g`.
 - `MomentumGradient` : une vitesse par paramètre, conservée d'un pas à l'autre. Convention PyTorch : `v = μ · v + (1 − dampening) · g`, avec une copie du gradient au premier pas.
-- `Adam` : Moyenne exponentielle des gradients (m, le momentum) et de leurs carrés (v, RMSprop) + une correction de biais pour le démarrage , et un compteur de pas par paramètre. Weight decay en L2.
+- `Adam` : Moyenne exponentielle des gradients (m, le momentum) et de leurs carrés (v, RMSprop) + une correction de biais pour le démarrage, et un compteur de pas par paramètre. Weight decay en L2.
 - `AdamW` : Adam avec le weight decay découplé, appliqué directement aux poids plutôt qu'au gradient.
- - `AdEMAMix` : AdamW avec un second momentum, lent (m₂, β₃ = 0.999 ou 0.9999), ajouté à la mise à jour avec un poids α. Deux schedulers optionnels font monter α de 0 à sa valeur finale et β_3 de β_1 à sa valeur finale. C'est l'optimiseur d'Apertus, le LLM suisse. Sa comparaison avec AdamW se fera sur MNIST ou d'autres réseaux plus tard.
+- `AdEMAMix` : AdamW avec un second momentum, lent (m₂, β₃ = 0.999 ou 0.9999), ajouté à la mise à jour avec un poids α.
 
 ### XOR
 
@@ -151,6 +151,68 @@ Aucun optimiseur ne gagne vraiment : le problème est trop petit. En inspectant 
 - Pourquoi Adam marche avec `lr = 1e-3` presque partout : le pas vaut environ `lr · m / √v`, de l'ordre de `lr` quelle que soit l'échelle des gradients.
 - Pourquoi AdamW : avec SGD, ajouter `wd · θ` au gradient revient exactement à rétrécir les poids. Avec Adam, ce terme est divisé par `√v`, et chaque paramètre est régularisé différemment selon l'historique de ses gradients.
 - Pourquoi AdEMAMix a deux moments : une seule moyenne exponentielle ne peut pas à la fois suivre les gradients récents et garder du poids sur des gradients vieux de milliers de pas. On a ducoup m_1 pour les gradients récents et m_2 pour les gradients plus ancients.
+
+## Étape 03 : MLP sur MNIST
+
+### Les données
+
+- `charger_mnist()` télécharge une seule fois le `.npz` de MNIST puis le relit depuis `data/`.
+- `split()` met de côté une validation (10 % par défaut) : les **indices** sont mélangés mais pas les données, pour que chaque image garde son étiquette.
+- `BasicDataLoader` : l'équivalent minimal du `DataLoader` de PyTorch. `for x, y in loader:` parcourt les batchs, dans un nouvel ordre à chaque epoch, et `len(loader)` donne le nombre de batchs. Sans mélange pour la validation.
+- `cross_entropy` accepte maintenant directement des indices de classe (comme `F.cross_entropy`) : elle va chercher la log-probabilité de la bonne classe avec `log_probas[arange(N), y]`, sans construire de one-hot.
+
+### Le prétraitement est dans le modèle
+
+- `Flatten` : `(B, 28, 28) → (B, 784)`, en gardant l'axe du batch.
+- `Normalize(moyenne, ecart_type)` : centre et réduit les pixels, avec des statistiques calculées sur la partie entraînement uniquement.
+
+Le modèle reçoit donc des pixels bruts, et quelqu'un qui l'utilise n'a pas besoin de connaître la normalisation :
+
+```python
+Sequential(Flatten(), Normalize(moyenne, ecart_type),
+           Linear(784, 256, rng=rng), ReLU(), Linear(256, 10, rng=rng, init=Init.lecun_))
+```
+
+### Entraînement et comparaison
+
+`mlp_mnist.py` entraîne chaque combinaison modèle * optimiseur sur 5 seed (même découpage pour toutes), garde pour chaque graine la meilleure époque en validation, et affiche la moyenne et l'écart-type.
+
+Exactitude de validation à la meilleure époque, 5 graines, 9 époques, batch 128 :
+
+| Modèle (paramètres)                  | SGD lr 0.1     | Momentum 0.9 lr 0.01 | AdamW lr 1e-3  | AdEMAMix lr 2e-4   |
+|--------------------------------------|----------------|----------------------|----------------|--------------------|
+| linéaire 784 → 10 (7 850)            | 91.52 ± 0.18 % | 91.55 ± 0.07 %       | 91.69 ± 0.12 % | **91.92 ± 0.06 %** |
+| bottleneck 784 → 8 → 256 → 10 (11 000) | 83.30 ± 7.89 % | 92.06 ± 0.75 %     | 93.73 ± 0.56 % | **94.09 ± 0.24 %** |
+| mlp 784 → 256 → 10 (204 000)         | 97.50 ± 0.11 % | 97.51 ± 0.08 %       | 97.67 ± 0.04 % | **97.68 ± 0.09 %** |
+| mlp 784 → 512 → 256 → 10 (536 000)   | 97.65 ± 0.09 % | 97.59 ± 0.08 %       | 97.55 ± 0.23 % | **97.66 ± 0.17 %** |
+| mlp 784 → 1024 → 10 (814 000)        | 97.67 ± 0.10 % | 97.60 ± 0.11 %       | 97.62 ± 0.09 % | **97.86 ± 0.11 %** |
+
+Le MLP 256 avec AdamW, évalué une seule fois sur le jeu de test : **97,7 %**.
+
+Ce que j'en retiens :
+
+- L'architecture compte bien plus que l'optimiseur : plus de 5 points entre le modèle linéaire et un MLP, quelques dixièmes au plus entre les optimiseurs.
+- Les optimiseurs se valent à peu près avec mes hyperparamètres (un seul lr chacun). AdEMAMix est légèrement devant sur le linéaire et le plus gros MLP. La vraie différence est la vitesse : AdamW et AdEMAMix atteignent leur meilleure époque vers 4-6 puis surapprennent, SGD et le momentum n'ont souvent pas fini à 9 époques.
+- Le MLP 256 est le meilleur compromis : 4 fois plus de paramètres ne rapportent que ~0,2 point.
+- Le bottleneck fait 2 points de mieux que le linéaire avec un nombre de paramètres comparable, mais il est instable avec SGD à lr 0.1.
+- Le découpage de la validation pèse autant que ces écarts : le même modèle passe de 97,4 % à 98,1 % selon les 6 000 images mises de côté.
+
+### La démo
+
+**DISCLAIMER** : Ne connaissant pas Tkinter, j'ai fait l'interface a l'aide de l'IA générative. De plus, j'ai utilisé l'IA pour la 
+fonction de téléchargement du dataset de MNIST sans avoir a importer TensorFlow, qui est lourd.
+
+`dessin.py` : une fenêtre tkinter où l'on dessine un chiffre à la souris, avec les 10 probabilités du MLP en temps réel. Le dessin est préparé comme les images de MNIST : recadré dans une boîte de 20 × 20, puis centré sur son centre de masse dans une image 28 × 28. Elle montre bien les limites du modèle : un 9 ou un 1 « à l'européenne », absents de MNIST, sont pris pour un 3 ou un 9, avec plus de 80 % de confiance.
+
+### Les points clés :
+
+- Pourquoi la normalisation fait partie du modèle -> un utilisateur doit pouvoir lui donner une image brute sans connaitre les paramètres choisi à l'entrainement
+- La loss initiale vaut environ Log(nb classe) car le modèle non entrainé est censé prédire chaque classe de manière uniforme. Cependant, le choix d'init fait un peu varier cette valeur
+- Sur de petit batch, la loss d'entrainement peut beaucoup varier (par exemple passer 0.004 à 0.1 entre deux batch). Le problème est qu'une seule image ratée sur 32 suffit a fortement impacter la loss.
+- Différence entre learning rate entre SGD et Adam : le pas de SGD vaut environ `lr × grad` alors que celui d'Adam environ `lr`
+- Le early stopping : la loss de validation remonte dès que le modèle commence à mémoriser les exemples plutôt que la règle sous-jacente alors que celle d'entraînement continue de baisser. Le modèle fait de l'overfiting et généralise moins bien : il vaut mieux l'arrêter avant.
+- MLP qui se trompe avec 87 % de confiance -> la softmax répartit toujours 100 % entre les 10 classes, meme si l'entrée ressemble à rien de connue. Il faudrait
+  ajouter une classe "unknown" par exemple, mais l'entrainement est plus compliqué (c'est.
 
 
 ## Exemple
@@ -217,6 +279,13 @@ for pas in range(100):
     optim.step()
 ```
 
+Et MNIST, avec l'étape 03 :
+
+```bash
+uv run python -m src.s03_mnist.mlp_mnist   # la comparaison des modèles et des optimiseurs
+uv run python -m src.s03_mnist.interface   # la démo : dessiner un chiffre
+```
+
 ## Installation
 
 Le projet utilise [uv](https://docs.astral.sh/uv/) et Python 3.14 ou plus récent.
@@ -234,7 +303,7 @@ comme référence dans les tests. Il sera utilisé pour entrainer les modèles.
 uv run pytest
 ```
 
-Déjà plus de 480 tests, construit de différentes manières :
+Déjà 535 tests, construit de différentes manières :
 
 - Tests vs NumPy pour le `BasicNDArray` : test si avec les mêmes données on a les mêmes résultats, y compris après transpose et broadcast.
 - Tests vs PyTorch pour l'autograd : mêmes chose qu'au dessus.
@@ -244,6 +313,7 @@ Déjà plus de 480 tests, construit de différentes manières :
 - Tests statistiques pour les initialisations : un test de Kolmogorov-Smirnov vérifie que les poids suivent la même loi que ceux de `torch.nn.init`.
 - Tests vs `torch.optim` pour les optimiseurs : les mêmes paramètres que PyTorch après chaque pas, en float64, sur des minibatchs différents, avec une couche qui n'a de gradient qu'un pas sur deux, et sans `zero_grad` (les gradients s'accumulent). Plus un test qui montre qu'Adam + L2 et AdamW divergent, alors qu'avec SGD les deux sont identiques.
 - Tests vs une implémentation de référence pour AdEMAMix (PyTorch n'en a pas) : l'Algorithm 1 du papier en NumPy, avec le gradient analytique de la fonction de Rosenbrock. La même trajectoire avec et sans schedulers, AdamW retrouvé quand α = 0, et une demi-vie de m₂ qui croît linéairement.
+- Tests du chargement des données : le découpage et les batchs ne perdent ni ne dupliquent aucun exemple, chaque image garde son étiquette, chaque époque donne un nouvel ordre reproductible. Et le modèle MNIST complet (`Flatten`, `Normalize`, `Linear`, cross-entropy avec des indices) comparé à PyTorch : même loss, mêmes gradients.
 
 Disclaimer : comme les tests ne sont pas forcément la partie la plus intéressante à écrire dans le projet, j'ai pris
 la décision de déléguer leur écriture à des LLM (Claude pour l'instant). 
@@ -258,10 +328,16 @@ src/
   s01_module_and_init/
     module.py            # BasicModule, BasicParameter
     init.py              # Initialisations (He, Xavier, LeCun...)
-    layers.py            # Modules spécifiques (ex : Linear...)
+    layers.py            # Modules spécifiques (Linear, ReLU, Sequential, Flatten, Normalize)
   s02_optimizer/
     optimizer.py         # Optimizer, SGD, MomentumGradient, Adam, AdamW, AdEMAMix
     xor.py               # XOR : comparaison des optimiseurs, inspection des neurones
+  s03_mnist/
+    donnees.py           # Téléchargement et chargement de MNIST 
+    utils.py             # split, minibatch, BasicDataLoader
+    mlp_mnist.py         # Modèles, entraînement, évaluation, comparaison
+    interface.py         # Démo : dessiner un chiffre, prédiction en temps réel
+    resultats_mlp.md     # Résultats du test
 tests/
   s00_autograd_and_tensors/
     basic_nd_array_test.py
@@ -272,6 +348,8 @@ tests/
     module_test.py
   s02_optimizer/
     optimizer_test.py
+  s03_mnist/
+    mlp_test.py
 ```
 
 
