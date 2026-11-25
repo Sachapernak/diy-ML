@@ -16,7 +16,7 @@ On retient ensuite les meilleures epochs pour chaque seed, et leurs métriques (
 ### Interprétations des résultats
 
 Pour ce problème, l'architecture compte plus que l'optimiseur. On gagne 5 points de pourcentage en passant d'une 
-regression linéaire à un MLP (92% -> 97,5%) tandis que les différent optimiseur ne font gagner au mieux pas plus quelques 
+regression logistique à un MLP (92% -> 97,5%) tandis que les différent optimiseur ne font gagner au mieux pas plus quelques 
 dixièmes de point, en général. Cependant, aucun n'arrive a passer la barre des 98%. Le plafond vient probablement de 
 l'architecture, et en passant à un CNN, je devrais pouvoir facilement dépasser ces résultats.
 

@@ -16,6 +16,7 @@ DOSSIER_DONNEES = Path(__file__).resolve().parents[2] / "data"
 def charger_mnist(dossier: Path = DOSSIER_DONNEES):
     """
     Renvoie MNIST sans nettoyage ou traitement
+    Cette fonction a été générée à l'aide de l'IA générative
 
     :param dossier: où garder le fichier en cache
     :return: (x_train, y_train, x_test, y_test)

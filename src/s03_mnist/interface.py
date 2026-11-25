@@ -4,6 +4,8 @@ Interface de prédictions de chiffres avec le MLP MNIST en temps réel.
 Lancement   : uv run python -m src.s03_mnist.dessin
 
 Met environ 30s a preparer le modèle.
+
+Le code Tkinter a été en grande partie généré via l'IA générative, après avoir décrit l'interface souhaitée.
 """
 import tkinter as tk
 
