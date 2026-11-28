@@ -28,7 +28,7 @@ standard quand le but devient d'aller plus loin plutôt que de passer son temps 
 | 03 | MLP sur MNIST                              | Fini     |
 | 04 | Embedding                                  | À faire  |
 | 05 | MLP sur fenêtre de N tokens                | À faire  |
-| 06 | CNN basique                                | À faire  |
+| 06 | CNN basique                                | En cours|
 | 07 | Attention une tête + masque causal         | À faire  |
 | 08 | Bloc complet (multi-head, LN, résiduelles) | À faire  |
 | 09 | Positions (apprises, puis RoPE)            | À faire  |
@@ -55,9 +55,6 @@ la lecture qui passe par un seul endroit.
 - `unbroadcast`, qui ramène chaque gradient à la shape de son tensor.
 - `detach()` et `no_grad()` pour sortir des valeurs du graphe.
 
-Opérations disponibles : `+ − * / ** @`, négation, `sum` et `mean` sur un ou plusieurs axes, `exp`, `log`, `relu`, `maximum`, 
-`max` sur un axe, `reshape`, `flatten`, `squeeze`, `expand_dims`, `transpose`, `swapaxes`, l'indexation 
-(avec accumulation sur les indices répétés), le log-sum-exp stable, `softmax` (naïf et stable), `log_softmax`, etc.
 
 ### Les points clés :
 
@@ -215,7 +212,36 @@ fonction de téléchargement du dataset de MNIST sans avoir a importer TensorFlo
   ajouter une classe "unknown" par exemple, mais l'entrainement est plus compliqué (c'est.
 
 
-## Exemple
+## Étape 06 : CNN (en cours)
+
+J'ai avancé l'étape 06 avant les embeddings vu que c'est la suite logique du MLP et qu'on peut tester sur MNIST
+
+### La convolution dans l'autograd
+
+Deux approche qui font le meme calcul :
+
+- `ultra_naive_conv` : Version très simple mais particulièrement lente de la convolution. Pour chaque position de sortie
+, on découpe le patch pixel par pixel, on empile tous les patchs avec `stack`, puis un seul matmul avec le kernel flatten. Ca construit des milliers de nœuds dans le graphe donc c'est surtout pour tester
+- `cross_corr2d` : Version optimisée. Au lieu de loop sur les positions de sortie, on boucle sur les cases du kernel: pour chaque case `(u, v)`, toute l'image décalée de `(u, v)` est une slice qu'on multiplie par le poids de la case du kernel. Avec un kernel 3x3 ca fait 9 tranches, au lieu d'une boucle sur toutes les positions de l'image. Cette version gère plusieurs canaux d'entrée et de sortie (noyau `(C_out, C_in, kh, kw)`, avec un `@` sur l'axe des canaux), le biais, le stride et la dilatation.
+
+
+Autres ajouts :
+
+- `stack` : empile des BasicTensor sur un nouvel axe avec le backward qui fait l'inverse, redécoupe le grad et rend à chaque BasicTensor d'origine.
+- `@` avec des vecteurs 1-D. Marchait pas avant, maintenant ca transforme les vecteurs en une matrice 1D `(1, k)` ou `(k, 1)`, applique les formules habituelles, puis revient à la shape d'origine.
+
+### Les points clés :
+
+- Pourquoi on parle de convolution alors qu'on calcule une cross-correlation : la vraie convolution retourne le noyau, mais comme il est appris, ça ne change rien.
+- La technique "decaler et additionner" où on calcul ce que couvre chaque poids du kernel
+- Un CNN c'est un cas particulier du MLP avec des poids partagés et presque tous nuls (matrice de Toeplitz par blocs). On le calcule jamais comme ça car la majorité de
+  la matrice serait vide.
+- Pourquoi la convolution est équivariante par translation : décaler l'image décale la sortie d'autant.
+- Le kernel a une shape `(C_out, C_in, kh, kw)` : chaque layer de l'image d'entrée a son propre filtre, et on peut decider d'avoir plusieurs layer en sortie.
+  (par exemple (R,G,B,IR) -> (Noir et blanc + temperature) donnerait C_in = 4, C_out = 2). kh et kw est simplement la hauteur et largeur du filtre.
+
+
+## Exemples
 
 ```python
 import numpy as np
@@ -303,7 +329,7 @@ comme référence dans les tests. Il sera utilisé pour entrainer les modèles.
 uv run pytest
 ```
 
-Déjà 535 tests, construit de différentes manières :
+Déjà près de 600 tests, construit de différentes manières :
 
 - Tests vs NumPy pour le `BasicNDArray` : test si avec les mêmes données on a les mêmes résultats, y compris après transpose et broadcast.
 - Tests vs PyTorch pour l'autograd : mêmes chose qu'au dessus.
@@ -314,6 +340,7 @@ Déjà 535 tests, construit de différentes manières :
 - Tests vs `torch.optim` pour les optimiseurs : les mêmes paramètres que PyTorch après chaque pas, en float64, sur des minibatchs différents, avec une couche qui n'a de gradient qu'un pas sur deux, et sans `zero_grad` (les gradients s'accumulent). Plus un test qui montre qu'Adam + L2 et AdamW divergent, alors qu'avec SGD les deux sont identiques.
 - Tests vs une implémentation de référence pour AdEMAMix (PyTorch n'en a pas) : l'Algorithm 1 du papier en NumPy, avec le gradient analytique de la fonction de Rosenbrock. La même trajectoire avec et sans schedulers, AdamW retrouvé quand α = 0, et une demi-vie de m₂ qui croît linéairement.
 - Tests du chargement des données : le découpage et les batchs ne perdent ni ne dupliquent aucun exemple, chaque image garde son étiquette, chaque époque donne un nouvel ordre reproductible. Et le modèle MNIST complet (`Flatten`, `Normalize`, `Linear`, cross-entropy avec des indices) comparé à PyTorch : même loss, mêmes gradients.
+- Tests de la convolution : `cross_corr2d` comparée à la version naive (plusieurs canaux, stride, dilatation, noyau rectangulaire, avec et sans biais), au gradcheck, et à `F.conv2d` de PyTorch. Plus un test d'équivariance : décaler l'image décale la sortie.
 
 Disclaimer : comme les tests ne sont pas forcément la partie la plus intéressante à écrire dans le projet, j'ai pris
 la décision de déléguer leur écriture à des LLM (Claude pour l'instant). 
@@ -324,7 +351,7 @@ la décision de déléguer leur écriture à des LLM (Claude pour l'instant).
 src/
   s00_autograd_and_tensors/
     basic_nd_array.py    # tableau n-d à strides, en Python pur
-    autograd.py          # BasicTensor, unbroadcast, no_grad, default_dtype
+    autograd.py          # BasicTensor, unbroadcast, no_grad, default_dtype, convolution
   s01_module_and_init/
     module.py            # BasicModule, BasicParameter
     init.py              # Initialisations (He, Xavier, LeCun...)
@@ -370,7 +397,7 @@ tests/
 - Diverses vidéo de [3blue1brown](https://www.youtube.com/@3blue1brown) 
 
 ## Utilisation des IA génératives dans le cadre de ce projet
-Par soucis de transparence, je trouve important de mentionner l'utilisation de l'IA générative dans ce projet.
+Par souci de transparence, je trouve important de mentionner l'utilisation de l'IA générative dans ce projet.
 Comme ce projet répond a un objectif pédagogique, je limite cependant son utilisation.
 
 J'utilise le modèle Claude d'Anthropic pour m'aider lors de ce projet :
@@ -378,6 +405,7 @@ J'utilise le modèle Claude d'Anthropic pour m'aider lors de ce projet :
 - Ecriture de la grande majorité des tests PyTest.
 - Verifier des codes que j'ai rédigés, trouver des problèmes et suggérer des pistes d'améliorations.
 - Discuter des concepts de machine learning, expliquer différement certains concepts.
+- M'expliquer des maths à 2h du mat' quand j'y comprends plus grand-chose.
 - Proposer des étapes à faire quand je n'ai pas trop d'idées sur quoi avancer; aider pour la roadmap.
 
 Ce que l'IA ne **fait pas** :
@@ -385,5 +413,5 @@ Ce que l'IA ne **fait pas** :
 - Réfléchir à ma place
 
 Le projet pourrait probablement être terminé en moins d'une après midi avec quelques agents qui tournent dessus, cependant,
-il n'y aurait aucun interet à faire ça. Comme je m'interdis de déléguer le travail à l'IA, et que je travail sur ce
-projet sur mon temps libre, il peut cependant avancer plutot lentement.
+il n'y aurait aucun intérêt à faire ça. Comme je m'interdis de déléguer le travail à l'IA, et que je travail sur ce
+projet sur mon temps libre, il peut cependant avancer plutôt lentement.

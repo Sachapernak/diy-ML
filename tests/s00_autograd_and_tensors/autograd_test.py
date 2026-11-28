@@ -658,14 +658,6 @@ def test_div_forward():
     assert np.allclose((a / b).data, [3.0, 2.0])
 
 
-def test_div_backward():
-    a = BasicTensor(6.0, requires_grad=True)
-    b = BasicTensor(2.0, requires_grad=True)
-    (a / b).backward()
-    assert np.allclose(a.grad, 0.5, atol=1e-5)
-    assert np.allclose(b.grad, -1.5, atol=1e-5)
-
-
 def test_gradcheck_div():
     a = BasicTensor(np.random.randn(2, 3), requires_grad=True)
     b = BasicTensor(np.random.rand(2, 3) + 1.0, requires_grad=True)  # loin de 0
@@ -1567,25 +1559,21 @@ def test_gradcheck_log_softmax():
 # 32. cross_entropy (sur logits)
 # ---------------------------------------------------------------------------
 
-def _one_hot(indices, nb_classes):
-    m = np.zeros((len(indices), nb_classes), dtype=np.float32)
-    m[np.arange(len(indices)), indices] = 1.0
-    return BasicTensor(m)
 
 def test_cross_entropy_valeur_connue():
     z = BasicTensor([[2.0, 1.0, 0.0]])
-    assert np.isclose(z.cross_entropy(_one_hot([0], 3)).data, 0.4076, atol=1e-3)
+    assert np.isclose(z.cross_entropy(one_hot([0], 3)).data, 0.4076, atol=1e-3)
 
 def test_cross_entropy_grands_logits():
     z = BasicTensor([[0.0, 1000.0, 0.0]])
-    loss = z.cross_entropy(_one_hot([0], 3))
+    loss = z.cross_entropy(one_hot([0], 3))
     assert np.isfinite(loss.data)
     assert np.isclose(loss.data, 1000.0)
 
 def test_cross_entropy_gradient_p_moins_y():
     N, C = 4, 3
     z = BasicTensor(np.random.randn(N, C), requires_grad=True)
-    y = _one_hot([0, 2, 1, 1], C)
+    y = one_hot([0, 2, 1, 1], C)
     z.cross_entropy(y).backward()
     e = np.exp(z.data - z.data.max(axis=-1, keepdims=True))
     p = e / e.sum(axis=-1, keepdims=True)
@@ -1601,7 +1589,7 @@ def test_cross_entropy_contre_pytorch():
     ref.backward()
 
     bz = BasicTensor(z, requires_grad=True)
-    loss = bz.cross_entropy(_one_hot(cibles, 4))
+    loss = bz.cross_entropy(one_hot(cibles, 4))
     loss.backward()
 
     assert np.isclose(loss.data, ref.item(), atol=1e-5)
@@ -1758,3 +1746,269 @@ def test_gradcheck_float64_matmul_log_softmax():
         poids = BasicTensor(np.random.randn(4, 5))
         gradcheck(lambda a, w: ((a @ w).log_softmax() * poids).sum(), [x, W],
                   eps=1e-6, atol=1e-7, rtol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# stack
+# ---------------------------------------------------------------------------
+
+def _tenseurs(n=3, shape=(2, 4), seed=0):
+    rng = np.random.default_rng(seed)
+    return [rng.standard_normal(shape).astype(np.float32) for _ in range(n)]
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2, -1, -2])
+def test_stack_forward_comme_numpy(axis):
+    donnees = _tenseurs()
+    sortie = BasicTensor.stack([BasicTensor(d) for d in donnees], axis=axis)
+    assert np.array_equal(sortie.data, np.stack(donnees, axis=axis))
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2, -1])
+def test_stack_redistribue_le_gradient(axis):
+    """Chaque tenseur recoit exactement sa tranche du gradient de la sortie."""
+    donnees = _tenseurs()
+    tenseurs = [BasicTensor(d, requires_grad=True) for d in donnees]
+    sortie = BasicTensor.stack(tenseurs, axis=axis)
+
+    poids = np.random.default_rng(1).standard_normal(sortie.shape).astype(np.float32)
+    (sortie * BasicTensor(poids)).sum().backward()
+
+    for i, t in enumerate(tenseurs):
+        assert np.allclose(t.grad, np.take(poids, i, axis=axis))
+
+
+def test_stack_un_tenseur_present_deux_fois_accumule():
+    """Le meme tenseur a deux places : ses deux gradients s'additionnent."""
+    a = BasicTensor(np.array([1.0, 2.0]), requires_grad=True)
+    b = BasicTensor(np.array([3.0, 4.0]), requires_grad=True)
+    sortie = BasicTensor.stack([a, b, a])
+
+    poids = np.array([[1.0, 10.0], [100.0, 1000.0], [2.0, 20.0]], dtype=np.float32)
+    (sortie * BasicTensor(poids)).sum().backward()
+
+    assert np.allclose(a.grad, [1.0 + 2.0, 10.0 + 20.0])
+    assert np.allclose(b.grad, [100.0, 1000.0])
+
+
+def test_stack_accepte_un_generateur():
+    """Un generateur ne se parcourt qu'une fois : il ne doit pas etre consomme par le forward."""
+    a = BasicTensor(np.array([1.0, 2.0]), requires_grad=True)
+    sortie = BasicTensor.stack(t * 2 for t in [a, a])
+    assert sortie.shape == (2, 2)
+    sortie.sum().backward()
+    assert np.allclose(a.grad, [4.0, 4.0])
+
+
+def test_stack_sans_gradient_ne_construit_pas_de_graphe():
+    sortie = BasicTensor.stack([BasicTensor(d) for d in _tenseurs()])
+    assert not sortie.requires_grad
+    assert sortie.parents == []
+
+
+def test_stack_liste_vide():
+    with pytest.raises(ValueError):
+        BasicTensor.stack([])
+
+
+def test_stack_shapes_differentes():
+    with pytest.raises(ValueError):
+        BasicTensor.stack([BasicTensor(np.zeros(2)), BasicTensor(np.zeros(3))])
+
+
+@pytest.mark.parametrize("axis", [0, 1, -1])
+def test_stack_comme_pytorch(axis):
+    torch = pytest.importorskip("torch")
+    donnees = _tenseurs()
+
+    nous = [BasicTensor(d, requires_grad=True) for d in donnees]
+    eux = [torch.tensor(d, requires_grad=True) for d in donnees]
+    s_nous = BasicTensor.stack(nous, axis=axis)
+    s_eux = torch.stack(eux, dim=axis)
+    assert np.allclose(s_nous.data, s_eux.detach().numpy())
+
+    poids = np.random.default_rng(2).standard_normal(s_nous.shape).astype(np.float32)
+    (s_nous * BasicTensor(poids)).sum().backward()
+    (s_eux * torch.tensor(poids)).sum().backward()
+    for t_nous, t_eux in zip(nous, eux):
+        assert np.allclose(t_nous.grad, t_eux.grad.numpy())
+
+
+# A coller dans tests/s00_autograd_and_tensors/autograd_test.py
+# (numpy, pytest, BasicTensor et default_dtype y sont deja importes)
+
+
+# ---------------------------------------------------------------------------
+# matmul avec des vecteurs 1-D
+# ---------------------------------------------------------------------------
+
+# (shape de a, shape de b) : tous les cas ou un des deux est un vecteur, plus un cas sans vecteur
+CAS_MATMUL = [
+    ((4,), (4, 3)),        # vecteur @ matrice
+    ((5, 4), (4,)),        # matrice @ vecteur
+    ((4,), (4,)),          # produit scalaire : la sortie est un scalaire
+    ((2, 5, 4), (4,)),     # batch @ vecteur
+    ((4,), (2, 4, 3)),     # vecteur @ batch
+    ((2, 5, 4), (4, 3)),   # batch @ matrice, sans vecteur (non-regression)
+]
+
+
+@pytest.mark.parametrize("shape_a, shape_b", CAS_MATMUL)
+def test_matmul_vecteurs_gradcheck(shape_a, shape_b):
+    rng = np.random.default_rng(0)
+    with default_dtype(np.float64):
+        a = BasicTensor(rng.standard_normal(shape_a), requires_grad=True)
+        b = BasicTensor(rng.standard_normal(shape_b), requires_grad=True)
+        # des poids aléatoires : sinon chaque case de la sortie a le même gradient amont (1)
+        poids = BasicTensor(rng.standard_normal(np.matmul(a.data, b.data).shape))
+        gradcheck(lambda a, b: (a @ b * poids).sum(), [a, b], eps=1e-6, atol=1e-6, rtol=1e-5)
+        assert a.grad.shape == shape_a and b.grad.shape == shape_b
+
+@pytest.mark.parametrize("shape_a, shape_b", CAS_MATMUL)
+def test_matmul_vecteurs_ne_modifie_pas_les_entrees(shape_a, shape_b):
+    """Le backward ne doit jamais changer la shape des donnees des tenseurs."""
+    rng = np.random.default_rng(1)
+    a = BasicTensor(rng.standard_normal(shape_a), requires_grad=True)
+    b = BasicTensor(rng.standard_normal(shape_b), requires_grad=True)
+    (a @ b).sum().backward()
+    assert a.data.shape == shape_a and b.data.shape == shape_b
+
+
+@pytest.mark.parametrize("shape_a, shape_b", CAS_MATMUL)
+def test_matmul_vecteurs_comme_pytorch(shape_a, shape_b):
+    torch = pytest.importorskip("torch")
+    rng = np.random.default_rng(2)
+    a0 = rng.standard_normal(shape_a).astype(np.float32)
+    b0 = rng.standard_normal(shape_b).astype(np.float32)
+    poids = rng.standard_normal(np.matmul(a0, b0).shape).astype(np.float32)
+
+    a, b = BasicTensor(a0, requires_grad=True), BasicTensor(b0, requires_grad=True)
+    ta, tb = torch.tensor(a0, requires_grad=True), torch.tensor(b0, requires_grad=True)
+
+    sortie = a @ b
+    t_sortie = ta @ tb
+    assert sortie.shape == tuple(t_sortie.shape)
+    assert np.allclose(sortie.data, t_sortie.detach().numpy(), atol=1e-5)
+
+    (sortie * BasicTensor(poids)).sum().backward()
+    (t_sortie * torch.tensor(poids)).sum().backward()
+    assert np.allclose(a.grad, ta.grad.numpy(), atol=1e-5)
+    assert np.allclose(b.grad, tb.grad.numpy(), atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# cross_corr2d
+# ---------------------------------------------------------------------------
+
+
+def _conv_par_la_version_naive(x0, k0, b0, stride, dilation):
+    """
+    utilise la version naive de la conv et ajoute le support pour les differents channel
+    """
+    sorties = []
+    for o in range(k0.shape[0]):
+        canal = sum(BasicTensor(x0[:, c:c + 1]).ultra_naive_conv(BasicTensor(k0[o, c]), stride, dilation).data[:, 0]
+                    for c in range(k0.shape[1]))
+        if b0 is not None:
+            canal = canal + b0[o]
+        sorties.append(canal)
+    return np.stack(sorties, axis=1)          # (B, C_out, h_out, w_out)
+
+
+# (shape de l'entree, shape du noyau, stride, dilatation)
+CAS_CONV = [
+    ((2, 1, 7, 7), (1, 1, 3, 3), (1, 1), (1, 1)),     # le cas le plus simple
+    ((2, 3, 9, 9), (4, 3, 3, 3), (1, 1), (1, 1)),     # plusieurs canaux d'entree et de sortie
+    ((2, 2, 10, 9), (3, 2, 3, 2), (2, 1), (1, 2)),    # noyau rectangulaire, stride et dilatation differents par axe
+    ((1, 1, 28, 28), (2, 1, 3, 3), (2, 2), (1, 1)),   # stride 2 sur une taille paire : la division ne tombe pas juste
+    ((2, 2, 11, 11), (2, 2, 3, 3), (3, 3), (2, 2)),   # stride et dilatation ensemble
+    ((1, 2, 5, 5), (3, 2, 5, 5), (1, 1), (1, 1)),     # noyau aussi grand que l'image : sortie 1 x 1
+]
+
+
+@pytest.mark.parametrize("shape_x, shape_k, stride, dilation", CAS_CONV)
+@pytest.mark.parametrize("avec_biais", [True, False])
+def test_cross_corr2d_comme_la_version_naive(shape_x, shape_k, stride, dilation, avec_biais):
+    rng = np.random.default_rng(0)
+    with default_dtype(np.float64):
+        x0, k0 = rng.standard_normal(shape_x), rng.standard_normal(shape_k)
+        b0 = rng.standard_normal(shape_k[0]) if avec_biais else None
+
+        sortie = BasicTensor(x0).cross_corr2d(BasicTensor(k0), stride, dilation,
+                                              BasicTensor(b0) if avec_biais else None)
+        attendu = _conv_par_la_version_naive(x0, k0, b0, stride, dilation)
+
+        assert sortie.shape == attendu.shape
+        assert np.allclose(sortie.data, attendu)
+
+
+@pytest.mark.parametrize("shape_x, shape_k, stride, dilation", CAS_CONV[:5])
+def test_cross_corr2d_gradcheck(shape_x, shape_k, stride, dilation):
+    """Les gradients de l'entree, du noyau et du biais, par differences finies."""
+    rng = np.random.default_rng(1)
+    with default_dtype(np.float64):
+        x = BasicTensor(rng.standard_normal(shape_x), requires_grad=True)
+        k = BasicTensor(rng.standard_normal(shape_k), requires_grad=True)
+        b = BasicTensor(rng.standard_normal(shape_k[0]), requires_grad=True)
+        sortie_shape = x.cross_corr2d(k, stride, dilation, b).shape
+        poids = BasicTensor(rng.standard_normal(sortie_shape))
+
+        gradcheck(lambda x, k, b: (x.cross_corr2d(k, stride, dilation, b) * poids).sum(),
+                  [x, k, b], eps=1e-6, atol=1e-6, rtol=1e-5)
+
+
+def test_cross_corr2d_equivariance_par_translation():
+    """
+    Decale l'image d'un pixel decale la sortie d'un pixel, avec les memes valeurs
+    (a l'interieur, loin des bords)
+    """
+    rng = np.random.default_rng(3)
+    x = rng.standard_normal((1, 2, 12, 12))
+    k = BasicTensor(rng.standard_normal((3, 2, 3, 3)))
+    decale = np.roll(x, shift=(1, 2), axis=(2, 3))       # 1 pixel vers le bas, 2 vers la droite
+
+    y = BasicTensor(x).cross_corr2d(k, (1, 1), (1, 1), None).data
+    y_decale = BasicTensor(decale).cross_corr2d(k, (1, 1), (1, 1), None).data
+
+    # On ignore la bordure que np.roll a fait "reboucler"
+    assert np.allclose(y_decale[..., 1:, 2:], y[..., :-1, :-2], atol=1e-5)
+
+
+def test_cross_corr2d_noyau_nul_donne_le_biais():
+    x = BasicTensor(np.random.default_rng(4).standard_normal((2, 3, 6, 6)))
+    k = BasicTensor(np.zeros((4, 3, 3, 3)))
+    b = BasicTensor(np.array([1.0, -2.0, 3.0, 0.5]))
+    sortie = x.cross_corr2d(k, (1, 1), (1, 1), b)
+    assert sortie.shape == (2, 4, 4, 4)
+    assert np.allclose(sortie.data, b.data[None, :, None, None])
+
+
+def test_cross_corr2d_garde_le_float32():
+    x = BasicTensor(np.zeros((1, 1, 8, 8)))
+    k = BasicTensor(np.zeros((2, 1, 3, 3)))
+    b = BasicTensor(np.zeros(2))
+    assert x.cross_corr2d(k, (1, 1), (1, 1), b).dtype == np.float32
+
+
+@pytest.mark.parametrize("shape_x, shape_k, stride, dilation", CAS_CONV)
+def test_cross_corr2d_comme_pytorch(shape_x, shape_k, stride, dilation):
+    torch = pytest.importorskip("torch")
+    rng = np.random.default_rng(5)
+    x0 = rng.standard_normal(shape_x).astype(np.float32)
+    k0 = rng.standard_normal(shape_k).astype(np.float32)
+    b0 = rng.standard_normal(shape_k[0]).astype(np.float32)
+
+    x, k, b = (BasicTensor(a, requires_grad=True) for a in (x0, k0, b0))
+    tx, tk, tb = (torch.tensor(a, requires_grad=True) for a in (x0, k0, b0))
+
+    sortie = x.cross_corr2d(k, stride, dilation, b)
+    t_sortie = torch.nn.functional.conv2d(tx, tk, tb, stride=stride, dilation=dilation)
+    assert sortie.shape == tuple(t_sortie.shape)
+    assert np.allclose(sortie.data, t_sortie.detach().numpy(), atol=1e-4)
+
+    poids = rng.standard_normal(sortie.shape).astype(np.float32)
+    (sortie * BasicTensor(poids)).sum().backward()
+    (t_sortie * torch.tensor(poids)).sum().backward()
+    assert np.allclose(x.grad, tx.grad.numpy(), atol=1e-4)
+    assert np.allclose(k.grad, tk.grad.numpy(), atol=1e-4)
+    assert np.allclose(b.grad, tb.grad.numpy(), atol=1e-4)

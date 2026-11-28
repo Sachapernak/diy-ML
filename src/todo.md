@@ -8,7 +8,7 @@
 | 03 | MLP sur MNIST                                 | NN de base                                                  | FINI       |
 | 04 | Embedding + bigramme char-level               | Comprendre du texte                                         | -          |
 | 05 | MLP sur fenêtre de N tokens                   | Fenêtre de contexte                                         | -          |
-| 06 | CNN basique                                   | Autre type de NN (branche latérale, pas requis pour le GPT) | -          |
+| 06 | CNN basique                                   | Autre type de NN (branche latérale, pas requis pour le GPT) | En cours   |
 | 07 | Attention 1 tête + masque causal              | Base des Transformers                                       | -          |
 | 08 | Bloc complet (multi-head, LN, résiduelles)    | Morceau de transformer                                      | -          |
 | 09 | Positions (apprises → RoPE)                   | Encodage de l'ordre des tokens                              | -          |
@@ -30,6 +30,8 @@
 - [x] `lse`, `naive_softmax`, `stable_softmax`, `log_softmax`, `naive_cross_entropy`
 - [x] `gradcheck` avec tolérance absolue, relative et message d'erreur
 - [x] `cross_entropy(logits, cibles)` construite sur `log_softmax`.
+- [x] `stack`, avec un backward qui redistribue le gradient
+- [x] `@` avec des vecteurs 1-D (backward corrigé)
 - [x] Pleins de tests
 
 ### Optionnel a faire
@@ -37,7 +39,6 @@
 - [ ] (optionnel) BCE
 
 ### Limites connues
-- `matmul` avec un vecteur 1-D : le forward marche, le backward marche pas (`swapaxes(-1, -2)` sur un tableau 1-D)
 - `backward()` seulement sur un scalaire
 - Le `BasicNDArray` n'a pas d'arithmétique élément par élément : l'autograd tourne sur NumPy (aussi pour des raisons de performances)
 
@@ -46,7 +47,7 @@
 
 ### Fait
 - [x] Module basic
-- [x] Module `Linear` : `x @ W + b`
+- [x] Module `Linear` : `x @ W.T + b`
 - [x] Init He / Xavier
 - [x] Tester les init
 
@@ -87,3 +88,25 @@
 - Le MLP plafonne vers 98 % : il perd la structure 2D de l'image (→ CNN, étape 06).
 - La démo se trompe sur les écritures absentes de MNIST (9 et 1 "européen" vs ), avec une forte confiance.
 - Le test a été fait sur les poids de la dernière époque, pas de la meilleure.
+
+## 06 · CNN basique   [En cours]
+
+Fait avant les étapes 04 et 05 car c'est la suite des MLP pour MNIST.
+
+### Fait
+- [x] `ultra_naive_conv` : patchs découpés pixel par pixel, empilés avec `stack`, puis un `@`, simple mais super lent
+- [x] `cross_corr2d` : version "décaler et additionner", plusieurs canaux d'entrée et de sortie, biais, stride, dilatation
+- [x] Tests : comparaison à la version naive, gradcheck, équivariance par translation, comparaison à `F.conv2d`
+
+### À faire
+- [ ] Padding : une opération `pad` (backward = la tranche centrale du gradient)
+- [ ] Module `Conv2d` : poids `(C_out, C_in, kh, kw)`, biais, `reset_parameters()` avec He (fan_in = C_in × kh × kw)
+- [ ] `MaxPool2d` 2 × 2 (`reshape` puis `max` sur les petits axes)
+- [ ] Un CNN sur MNIST, comparé au MLP 256
+- [ ] Sauvegarde et chargement des poids (un CNN probablement long à réentraîner à chaque lancement de la démo)
+- [ ] Démo : option pour choisir entre le MLP et le CNN a la volée
+- [ ] (optionnel) Version Toeplitz-block de la convolution pour montrer qu'un CNN c'est un cas particulier du MLP
+
+### Limites connues
+- Pas encore de padding
+- `cross_corr2d` attend une entrée à 4 axes `(B, C_in, H, W)` : les images MNIST `(B, 28, 28)` doivent passer en `(B, 1, 28, 28)`

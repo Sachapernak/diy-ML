@@ -163,7 +163,12 @@ class BasicTensor:
     def _needs_grad(*tensors):
         return _GRAD_ENABLED and any(t.requires_grad for t in tensors)
 
-    # OP avec symbol python
+
+
+    # =============
+    # Op avec symbol python
+    # =============
+
     def __mul__(self, other):
         if not isinstance(other, BasicTensor):
             other = BasicTensor(other)
@@ -283,12 +288,30 @@ class BasicTensor:
             #
             # grad_A = grad @ B.T
             # grad_B = A.T @ grad
-
+            #
+            # si a ou b sont des vect, les transforme en matrice "1D" pour que ca marche pareil
             def _backward():
-                self._accumulate(unbroadcast(np.matmul(out.grad, np.swapaxes(other.data, -1, -2)),
-                                             self.data.shape))
-                other._accumulate(unbroadcast(np.matmul(np.swapaxes(self.data, -1, -2), out.grad),
-                                              other.data.shape))
+                a = self.data
+                b = other.data
+
+                g = out.grad
+
+                if b.ndim == 1:
+                    b = b[:, None] # b passe en shape (shape_b, 1)
+                    g = np.expand_dims(g, -1) # ajout d'un axe a g en dernière pos
+
+                # promotion vers matrice pour que ca marche aussi pour les vect (1D)
+                if a.ndim == 1:
+                    a = a[None, :] # a passe en shape (1, shape_a)
+                    g = np.expand_dims(g, -2) # ajout d'un axe a g en avant dernière pos
+
+
+
+                self._accumulate(unbroadcast(np.matmul(g, np.swapaxes(b, -1, -2)),
+                                             a.shape).reshape(self.shape))
+                other._accumulate(unbroadcast(np.matmul(np.swapaxes(a, -1, -2), g),
+                                              b.shape).reshape(other.shape))
+
 
             out._backward = _backward
 
@@ -381,8 +404,9 @@ class BasicTensor:
             other = BasicTensor(other)
         return other.pow(self)
 
+    # =============
     # OP de base
-
+    # =============
     def mul(self, other):
         return self.__mul__(other)
 
@@ -454,23 +478,6 @@ class BasicTensor:
 
     def div(self, other):
         return self.__truediv__(other)
-
-    def relu(self):
-
-        data = np.maximum(0, self.data)
-
-        out = BasicTensor._from_op(data)
-
-        if BasicTensor._needs_grad(self):
-            out.requires_grad = True
-            out.parents = [self]
-
-            def _backward():
-                self._accumulate(out.grad * (self.data > 0))
-
-            out._backward = _backward
-
-        return out
 
     def maximum(self, other):
         if not isinstance(other, BasicTensor):
@@ -557,6 +564,136 @@ class BasicTensor:
 
         return out
 
+    # =============
+    # Op complexes
+    # =============
+
+    def relu(self):
+
+        data = np.maximum(0, self.data)
+
+        out = BasicTensor._from_op(data)
+
+        if BasicTensor._needs_grad(self):
+            out.requires_grad = True
+            out.parents = [self]
+
+            def _backward():
+                self._accumulate(out.grad * (self.data > 0))
+
+            out._backward = _backward
+
+        return out
+
+    def ultra_naive_conv(self, kernel, stride, dilation):
+        """
+        Version ultra-naive de la convolution
+        :param kernel: kernel de la conv de shape (..., kh, kw)
+        :param stride: stride
+        :param dilation: dilatation du kernel
+        :return:
+        """
+
+        # convention pytorch
+        h_in = self.shape[-2]
+        w_in = self.shape[-1]
+
+        k_shape = kernel.shape
+
+        patchs_item = []
+
+        i_range = range(0, h_in - (dilation[0] * (k_shape[-2] - 1)), stride[0])
+        j_range = range(0, w_in -  (dilation[1] * (k_shape[-1] - 1)), stride[1])
+
+        h_out = len(i_range)
+        w_out = len(j_range)
+
+        for i in i_range:
+            for j in j_range:
+                # (B, C, kernel_width * kernel_height)
+                patch = BasicTensor.stack([self[..., i + i_k, j + j_k]  # 1 pixel pour chaque image et canal
+                                           for i_k in range(0, k_shape[-2] * dilation[0], dilation[0])
+                                            for j_k in range(0, k_shape[-1] *  dilation[1], dilation[1])], # shape (B, C)
+                                          axis = -1)
+
+                patchs_item.append(patch)
+        # (h_out * w_out, B, C, kernel_width * kernel_height
+        patchs = BasicTensor.stack(patchs_item)
+
+        # shape = (h_out * w_out, B, C) puis reshape vers (h_out, w_out, B, C) avec (B, C) = self.shape[:-2]
+        res = (patchs @ kernel.flatten(start_axis=0)).reshape(h_out, w_out, *self.shape[:-2])
+
+        # On transpose pour paser de (h_out, w_out, b, c) a (b, c, h_out, w_out)
+        return res.transpose((2, 3, 0, 1,))
+
+
+    def cross_corr2d(self,
+                     kernel:BasicTensor,
+                     stride,
+                     dilation ,
+                     biais):
+        """
+        Calcul la cross-correlation en 2D pour les CNN
+
+        :param kernel:
+            les kernel a appliquer, de format (C_out, C_in, kernel_height, kernel_width)
+            C_out sont les channel de sortie (l'image de sortie a C_out layer)
+            C_in sont les channel d'entré (on a un filtre par layer de l'image d'entrée)
+        :param stride:
+            le nombre de case à sauter dans chaque direction d'image au format (hauteur, largeur)
+        :param dilation:
+            espace entre les point du kernel, de shape (hauteur, largeur)
+        :param biais:
+            biais a appliquer a chaque channel, format (C_out)
+        :return:
+            BasicTensor de shape (Batch, C_out, h_out, w_out)
+        """
+
+        h_in = self.shape[-2]
+        w_in = self.shape[-1]
+
+        k_h = kernel.shape[-2]
+        k_w = kernel.shape[-1]
+
+
+        h_out = (h_in - dilation[0] * (k_h - 1) - 1) // stride[0] + 1
+        w_out = (w_in - dilation[1] * (k_w - 1) - 1) // stride[1] + 1
+
+        x = self.transpose((0, 2, 3, 1)) # pour passer de (B, C, H, W) à (B, H, W, C) avant le matmult
+
+        # pour chaque case du kernel ou calcul toutes ses valeurs d'un coup
+        # l'astuce est que chaque poids s'applique sur une zone fixe qui fait la taille de la sortie et qui démare a
+        # la position du poid dans le kernel
+        #
+        # ex :
+        # [ 1 2 3 4 ]
+        # [ 5 6 7 8 ]          [a b c]                     [1 2]        [2 3] (on a juste décalé d'1 a gauche
+        # [ 9 1 2 3 ] avec K = [d e f] -> a s'applique sur [5 6], b sur [6 7]  dans l'image comme dans le res)
+        # [ 4 5 6 7 ]          [g h i]
+        #
+        #
+        # Pour prendre en compte la stride, on multiplie la "fin" de chaque morceau par la stride
+        # et on utilise [ : : stride] pour préciser de combien on avance a chaque fois
+        #
+        # Pour la dilation, on multiplie le debut par la dilation
+        #
+        data = sum(x[...,
+        u * dilation[0]: u * dilation[0] + stride[0] * (h_out - 1) + 1: stride[0],
+        v * dilation[1]: v * dilation[1] + stride[1] * (w_out - 1) + 1: stride[1], :]
+                   @ kernel[: , : , u, v].T  # Si on a plusieurs canaux on passe par @
+                   for u in range(0, k_h) for v in range(0, k_w)
+                ) # Format (B, h_out, w_out, c_out)
+
+        if biais is not None:
+            data = data + biais # on a (..., c_out), or le biais doit s'ajouter a chaque canal
+                                # numpy transforme biais de shape (C_out) en (1, 1, 1, C_out) tout seul
+
+        out = data.transpose((0, 3, 1, 2)) # format (B, c_out, h_out, w_out)
+
+        return out
+
+
+
     def lse(self, axis=-1, keepdims=False):
         """
         Log Sum Exp stable : log(sum(exp(x))) sur un axe
@@ -603,6 +740,10 @@ class BasicTensor:
         -> Utile pour le calcul de loss
         """
         return self.sub(self.lse(axis=axis, keepdims=True))
+
+    # =============
+    # Losses
+    # =============
 
     def naive_cross_entropy(self, target):
         # H(P,Q) = - Sum ( log( Q(x) ) * P(x) )
@@ -669,7 +810,12 @@ class BasicTensor:
             raise ValueError(f"target shape: {target.shape} dont match this logits shape : {self.shape}")
         return self.sub(target).pow(2).mean()
 
-    # ================ OP de forme
+
+    # =============
+    # OP de forme
+    # =============
+
+
     @property
     def shape(self):
         return self.data.shape
@@ -768,12 +914,57 @@ class BasicTensor:
     def T(self):
         return self.transpose()
 
+    @staticmethod
+    def stack(tensors, axis = 0):
+        """
+        empile des tensors sur un axe
+        ex: a = [1, 2]  b = [3, 4]  c = [5, 6]
+
+        stack([a, b, c], axis = 0)
+        Donne :
+        a -> [[1, 2],
+        b -> [3, 4],
+        c -> [5, 6]]
+
+         stack([a, b, c], axis = 1)
+         Donne :
+           a  b  c
+           v  v  v
+         [[1, 3, 5],
+          [2, 4, 6]]
+
+         le backward "dépile" le grad vers les tensors d'origine
+
+        :param tensors: list de tensors
+        :param axis: axe pour empiler
+        :return: un nouveau BasicTensor empilé
+        """
+        tensors = list(tensors)
+
+        if not tensors:
+            raise ValueError("Tensor list cannot be empty")
+
+        data = np.stack([tensor.data for tensor in tensors], axis)
+        out = BasicTensor._from_op(data)
+
+        if BasicTensor._needs_grad(*tensors):
+            out.requires_grad = True
+            out.parents = tensors
+
+            def _backward():
+                # Fait l'inverse de stack : on redistribue aux trucs
+                for i, tensor in enumerate(tensors):
+                    tensor._accumulate(np.take(out.grad, i, axis=axis))
+
+            out._backward = _backward
+        return out
+
     # =============
     # Autres OP
     # =============
 
     def argmax(self, axis=-1):
-        return self.data.argmax(axis=axis).astype(dtype=self.data.dtype)
+        return self.data.argmax(axis=axis)
 
     def item(self):
         return self.data.item()

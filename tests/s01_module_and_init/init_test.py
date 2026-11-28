@@ -211,7 +211,6 @@ def test_linear_entree_3d_comme_pytorch():
     comparer_forward_backward(nous, eux, (2, 4, 5))
 
 
-@pytest.mark.xfail(reason="backward du matmul ne gere pas une entree 1-D", strict=True)
 def test_linear_entree_1d_comme_pytorch():
     nous, eux = lineaires_jumeaux(5, 3)
     comparer_forward_backward(nous, eux, (5,))
